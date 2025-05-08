@@ -21,13 +21,8 @@
 
 在运行脚本前，请确保已安装以下依赖：
 
-- curl
-- grep
-- awk
-- jq
-- sudo
-- git
-- nft
+| curl | grep | awk | jq | sudo | git | nft |
+|------|------|-----|----|------|-----|-----|
 
 以 Debian/Ubuntu 为例，可使用如下命令安装：
 
