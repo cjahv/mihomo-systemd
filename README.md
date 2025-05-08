@@ -45,6 +45,8 @@ sudo yum install -y curl grep gawk jq sudo git nftables
 git clone https://github.com/your-username/mihomo-systemd.git
 cd mihomo-systemd && chmod +x auto_task.sh
 ./auto_task.sh          # 安装 + 配置 + 启动
+
+# 安装完成后，直接通过浏览器访问 http://<服务器IP>/ui 进入 Mihomo Web 管理页面。
 ```
 
 ## 定时更新（可选）
