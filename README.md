@@ -17,6 +17,30 @@
 
 ### 本地安装
 
+## 依赖安装
+
+在运行脚本前，请确保已安装以下依赖：
+
+- curl
+- grep
+- awk
+- jq
+- sudo
+- git
+- nft
+
+以 Debian/Ubuntu 为例，可使用如下命令安装：
+
+```bash
+sudo apt update && sudo apt install -y curl grep awk jq sudo git nftables
+```
+
+如为 CentOS/RHEL/Fedora，请使用：
+
+```bash
+sudo yum install -y curl grep gawk jq sudo git nftables
+```
+
 ```bash
 git clone https://github.com/your-username/mihomo-systemd.git
 cd mihomo-systemd && chmod +x auto_task.sh
