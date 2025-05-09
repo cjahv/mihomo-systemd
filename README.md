@@ -60,3 +60,17 @@ MIT
 
 * [MetaCubeX/mihomo](https://github.com/MetaCubeX/mihomo)
 * [MetaCubeX/metacubexd](https://github.com/MetaCubeX/metacubexd)
+
+## 系统截图
+
+### 入口
+![入口](image/1.png)
+
+### METACUBEXD
+![METACUBEXD](image/2.png)
+
+### 设置
+![设置](image/3.png)
+
+### 更新配置
+![更新配置](image/4.png)
