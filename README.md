@@ -17,7 +17,7 @@
 
 ### 本地安装
 
-## 依赖安装
+#### 依赖安装
 
 在运行脚本前，请确保已安装以下依赖：
 
@@ -36,19 +36,21 @@ sudo apt update && sudo apt install -y curl grep awk jq sudo git nftables
 sudo yum install -y curl grep gawk jq sudo git nftables
 ```
 
+#### 安装
+
 ```bash
 git clone https://github.com/your-username/mihomo-systemd.git
 cd mihomo-systemd && chmod +x auto_task.sh
 ./auto_task.sh          # 安装 + 配置 + 启动
 
-# 安装完成后，直接通过浏览器访问 http://<服务器IP>/ui 进入 Mihomo Web 管理页面。
+# 不出意外安装完成了，直接通过浏览器访问 http://<服务器IP> 进入管理页面。
 ```
 
-## 定时更新（可选）
+## 定时更新配置（可选）
 
 ```bash
 crontab -e
-# 每天 01:00 自动更新
+# 每天 01:00 自动更新配置
 0 1 * * * /root/mihomo-systemd/auto_task.sh >> /root/mihomo-systemd/log.txt 2>&1
 ```
 
