@@ -21,10 +21,13 @@ CIDR_FILE="${CURRENT_DIR}/cn_cidr.txt"
 CONFIG_FILE="${CURRENT_DIR}/config.yaml"
 SERVICE_FILE="/etc/systemd/system/mihomo.service"
 ENTRYPOINT_SCRIPT="${CURRENT_DIR}/entrypoint_mihomo.sh"
+MANAGER_SERVICE_FILE="/etc/systemd/system/mihomo-manager.service"
+PYTHON_SCRIPT="${CURRENT_DIR}/main.py"
 
 # hash缓存文件
 CONFIG_HASH_FILE="${CURRENT_DIR}/.config_hash"
 CIDR_HASH_FILE="${CURRENT_DIR}/.cidr_hash"
+ENV_HASH_FILE="${CURRENT_DIR}/.env_hash"
 
 # 配置覆写规则列表 - 格式: "路径=值"
 # 添加新的覆写规则只需在此数组中添加新的项
@@ -35,7 +38,7 @@ CONFIG_OVERRIDES=(
     "iptables.enable=false"
     "routing-mark=255"
     "external-ui=ui"
-    "external-controller=0.0.0.0:80"
+    "external-controller=0.0.0.0:9900"
     "secret=${MIHOMO_SECRET}"
     "tproxy-port=7893"
     "mixed-port=7890"
@@ -127,16 +130,83 @@ EOF
     fi
 }
 
-# 1. 检查并安装mihomo
+# 检查Python版本并安装manager服务
+check_manager_service() {
+    # 检查Python3是否安装
+    if ! command -v python3 &> /dev/null; then
+        handle_error "未找到Python3，请先安装Python3"
+    fi
+    
+    # 获取Python3的绝对路径
+    PYTHON_PATH=$(which python3)
+    log_info "找到Python3路径: $PYTHON_PATH"
+    
+    # 检查Python版本
+    PYTHON_VERSION=$($PYTHON_PATH --version 2>&1)
+    log_info "Python版本: $PYTHON_VERSION"
+    
+    # 确认是Python3
+    if [[ ! $PYTHON_VERSION =~ ^Python\ 3 ]]; then
+        handle_error "系统Python版本不是Python3，请安装Python3"
+    fi
+    
+    # 检查Python脚本是否存在
+    if [ ! -f "$PYTHON_SCRIPT" ]; then
+        handle_error "Python脚本 $PYTHON_SCRIPT 不存在"
+    fi
+    
+    # 确保Python脚本有执行权限
+    sudo chmod +x "$PYTHON_SCRIPT" || handle_error "设置Python脚本执行权限失败"
+    
+    # 检查manager服务是否已启用
+    if ! systemctl --quiet is-enabled mihomo-manager.service 2>/dev/null; then
+        log_warn "mihomo-manager服务未安装或未启用，准备安装..."
+        log_info "动态创建mihomo-manager服务文件..."
+        
+        # 创建服务文件内容
+        sudo tee $MANAGER_SERVICE_FILE > /dev/null << EOF
+[Unit]
+Description=Mihomo Manager Service
+After=network.target
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=1
+WorkingDirectory=${CURRENT_DIR}
+ExecStart=${PYTHON_PATH} ${PYTHON_SCRIPT}
+ExecStartPre=/usr/bin/sleep 1s
+ExecStop=/bin/kill -SIGTERM \$MAINPID
+KillMode=process
+KillSignal=SIGTERM
+TimeoutStopSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+        
+        sudo systemctl daemon-reload || handle_error "systemd重载失败"
+        sudo systemctl enable mihomo-manager.service || handle_error "mihomo-manager服务启用失败"
+        sudo systemctl start mihomo-manager.service
+        log_info "mihomo-manager服务安装并启用成功"
+    else
+        log_info "mihomo-manager服务已安装"
+    fi
+}
+
+# 检查并安装mihomo
 check_mihomo
 
-# 2. 确保入口脚本有执行权限
+# 确保入口脚本有执行权限
 ensure_entrypoint_executable
 
-# 3. 检查并安装mihomo服务
+# 检查并安装mihomo服务
 check_mihomo_service
 
-# 4. 下载中国IP段列表
+# 检查并安装manager服务
+check_manager_service
+
+# 下载中国IP段列表
 log_info "下载中国IP段列表..."
 if sudo curl -o $CIDR_FILE -L $CN_CIDR_URL; then
     log_info "中国IP段列表下载成功"
@@ -148,7 +218,7 @@ else
     fi
 fi
 
-# 5. 下载配置文件
+# 下载配置文件
 log_info "下载配置文件..."
 if sudo curl -o $CONFIG_FILE $CONFIG_URL; then
     log_info "配置文件下载成功"
@@ -160,7 +230,7 @@ else
     fi
 fi
 
-# 5.1 覆写配置文件
+# 覆写配置文件
 log_info "开始覆写配置文件..."
 
 # 检查依赖：yq
@@ -204,18 +274,21 @@ for override in "${CONFIG_OVERRIDES[@]}"; do
     fi
 done
 
-# 6. 检查hash变化决定是否重启mihomo服务
+# 检查hash变化决定是否重启mihomo服务
 log_info "检查配置文件和IP段文件是否有变化..."
 
 # 计算当前hash
 current_config_hash=$(sha256sum "$CONFIG_FILE" | awk '{print $1}')
 current_cidr_hash=$(sha256sum "$CIDR_FILE" | awk '{print $1}')
+current_env_hash=$(sha256sum ".env" | awk '{print $1}')
 
 # 读取上次hash
 last_config_hash=""
 last_cidr_hash=""
+last_env_hash=""
 [ -f "$CONFIG_HASH_FILE" ] && last_config_hash=$(cat "$CONFIG_HASH_FILE")
 [ -f "$CIDR_HASH_FILE" ] && last_cidr_hash=$(cat "$CIDR_HASH_FILE")
+[ -f "$ENV_HASH_FILE" ] && last_env_hash=$(cat "$ENV_HASH_FILE")
 
 need_restart=false
 if [[ "$current_config_hash" != "$last_config_hash" ]]; then
@@ -230,10 +303,17 @@ if [[ "$current_cidr_hash" != "$last_cidr_hash" ]]; then
 else
     log_info "IP段文件无变化"
 fi
+if [[ "$current_env_hash" != "$last_env_hash" ]]; then
+    log_info ".env文件有变化"
+    need_restart=true
+else
+    log_info ".env文件无变化"
+fi
 
 # 保存最新hash
 echo "$current_config_hash" > "$CONFIG_HASH_FILE"
 echo "$current_cidr_hash" > "$CIDR_HASH_FILE"
+echo "$current_env_hash" > "$ENV_HASH_FILE"
 
 if [ "$need_restart" = true ]; then
     log_info "重启mihomo服务..."

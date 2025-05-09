@@ -1,0 +1,692 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>Mihomo 控制面板</title>
+        <style>
+            :root {
+                color-scheme: dark;
+            }
+
+            body,
+            html {
+                margin: 0;
+                padding: 0;
+                height: 100%;
+                width: 100%;
+                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+                background-color: #1e1e1e;
+                color: #d4d4d4;
+                display: flex;
+                overflow: hidden;
+            }
+
+            .container {
+                display: flex;
+                width: 100%;
+                height: 100%;
+            }
+
+            .sidebar {
+                width: 120px;
+                background-color: #252526;
+                padding: 20px;
+                display: flex;
+                flex-direction: column;
+                justify-content: space-between;
+                box-sizing: border-box;
+            }
+
+            .sidebar-top .nav-button,
+            .sidebar-bottom .nav-button {
+                background-color: #333333;
+                color: #cccccc;
+                border: 0;
+                padding: 10px 15px;
+                margin-bottom: 10px;
+                cursor: pointer;
+                text-align: center;
+                width: 100%;
+                font-size: 14px;
+                transition: background-color 0.2s ease, color 0.2s ease;
+            }
+
+            .sidebar-top .nav-button:hover,
+            .sidebar-bottom .nav-button:hover {
+                background-color: #3e3e3e;
+                color: #ffffff;
+            }
+
+            .sidebar-top .nav-button.active {
+                background-color: #007acc;
+                color: #ffffff;
+            }
+
+            .content {
+                flex-grow: 1;
+                padding: 0;
+                display: flex;
+                flex-direction: column;
+                overflow: hidden;
+            }
+
+            #uiFrame {
+                width: 100%;
+                height: 100%;
+                border: none;
+                display: block;
+            }
+
+            .settings-view,
+            .logs-view {
+                padding: 20px;
+                box-sizing: border-box;
+                overflow-y: auto;
+                height: 100%;
+                background-color: #1e1e1e;
+            }
+
+            .settings-view h2,
+            .logs-view h2 {
+                color: #00aaff;
+                margin-top: 0;
+                border-bottom: 1px solid #333;
+                padding-bottom: 10px;
+            }
+
+            .settings-view ul {
+                list-style-type: none;
+                padding: 0;
+            }
+
+            .settings-view li {
+                margin-bottom: 15px;
+                padding: 10px;
+                background-color: #2a2a2a;
+            }
+
+            .settings-view label {
+                display: flex;
+                align-items: center;
+                margin-bottom: 8px;
+                color: #b0b0b0;
+                font-size: 14px;
+            }
+
+            .settings-view input[type="checkbox"] {
+                margin-right: 10px;
+                accent-color: #007acc;
+                position: relative;
+                width: 16px;
+                height: 16px;
+                -webkit-appearance: none;
+                -moz-appearance: none;
+                appearance: none;
+                background-color: #2a2a2a;
+                cursor: pointer;
+            }
+
+            .settings-view input[type="checkbox"]::before {
+                content: "";
+                position: absolute;
+                top: 0;
+                left: 0;
+                width: 100%;
+                height: 100%;
+                background-color: #3c3c3c;
+            }
+
+            .settings-view input[type="checkbox"]:checked::before {
+                background-color: #007acc;
+            }
+
+            .settings-view input[type="checkbox"]:checked::after {
+                content: "";
+                position: absolute;
+                left: 5px;
+                top: 2px;
+                width: 4px;
+                height: 8px;
+                border: solid white;
+                border-width: 0 2px 2px 0;
+                transform: rotate(45deg);
+            }
+
+            .settings-view input[type="text"] {
+                width: calc(100% - 20px);
+                padding: 8px 10px;
+                background-color: #3c3c3c;
+                border: 0;
+                color: #d4d4d4;
+                box-sizing: border-box;
+            }
+
+            .settings-view input[type="text"]:focus-visible {
+                outline: none;
+                background-color: #454545;
+                box-shadow: 0 0 0 2px rgba(0, 122, 204, 0.3);
+            }
+
+            .settings-view input[type="checkbox"]:focus-visible {
+                outline: none;
+                box-shadow: 0 0 0 2px rgba(0, 122, 204, 0.3);
+            }
+
+            #logOutput {
+                background-color: #1a1a1a;
+                color: #a0a0a0;
+                padding: 15px;
+                white-space: pre-wrap;
+                word-break: break-all;
+                height: calc(100% - 70px);
+                overflow-y: auto;
+                border: 0;
+                font-family: "Consolas", "Monaco", monospace;
+                font-size: 13px;
+            }
+
+            /* ANSI 颜色样式 */
+            #logOutput .black {
+                color: #000000;
+            }
+            #logOutput .red {
+                color: #ff0000;
+            }
+            #logOutput .green {
+                color: #00ff00;
+            }
+            #logOutput .yellow {
+                color: #ffff00;
+            }
+            #logOutput .blue {
+                color: #0000ff;
+            }
+            #logOutput .magenta {
+                color: #ff00ff;
+            }
+            #logOutput .cyan {
+                color: #00ffff;
+            }
+            #logOutput .white {
+                color: #ffffff;
+            }
+
+            #logOutput .gray {
+                color: #808080;
+            }
+            #logOutput .lightred {
+                color: #ff8080;
+            }
+            #logOutput .lightgreen {
+                color: #80ff80;
+            }
+            #logOutput .lightyellow {
+                color: #ffff80;
+            }
+            #logOutput .lightblue {
+                color: #8080ff;
+            }
+            #logOutput .lightmagenta {
+                color: #ff80ff;
+            }
+            #logOutput .lightcyan {
+                color: #80ffff;
+            }
+            #logOutput .lightwhite {
+                color: #ffffff;
+            }
+
+            #saveSettingsBtn {
+                background-color: #4caf50;
+                width: auto;
+                padding: 10px 20px;
+                margin-top: 10px;
+                border: 0;
+                color: #ffffff;
+                cursor: pointer;
+            }
+
+            #saveSettingsBtn:hover {
+                background-color: #45a049;
+            }
+
+            /* 密钥验证界面样式 */
+            #authOverlay {
+                position: fixed;
+                z-index: 9999;
+                top: 0;
+                left: 0;
+                width: 100vw;
+                height: 100vh;
+                background: #1e1e1e;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+            }
+
+            #authContainer {
+                background: #252526;
+                padding: 32px 32px 24px 32px;
+                min-width: 320px;
+                max-width: 90vw;
+            }
+
+            #authContainer h2 {
+                color: #00aaff;
+                margin-top: 0;
+                text-align: center;
+            }
+
+            #secretInput {
+                width: 100%;
+                padding: 10px 12px;
+                margin: 16px 0 8px 0;
+                background: #333;
+                border: 0;
+                color: #fff;
+                font-size: 16px;
+                box-sizing: border-box;
+            }
+
+            #secretInput:focus-visible {
+                outline: none;
+                background-color: #454545;
+                box-shadow: 0 0 0 2px rgba(0, 122, 204, 0.3);
+            }
+
+            #secretSubmitBtn {
+                width: 100%;
+                padding: 10px 0;
+                background: #007acc;
+                color: #fff;
+                border: 0;
+                font-size: 16px;
+                cursor: pointer;
+                box-sizing: border-box;
+            }
+
+            #secretSubmitBtn:hover {
+                background: #0086dd;
+            }
+
+            #secretSubmitBtn:focus-visible {
+                outline: none;
+                background: #0086dd;
+                box-shadow: 0 0 0 2px rgba(0, 122, 204, 0.3);
+            }
+
+            #secretError {
+                color: #ff5252;
+                margin-top: 10px;
+                text-align: center;
+                display: none;
+            }
+        </style>
+    </head>
+    <body>
+        <div id="authOverlay">
+            <div id="authContainer">
+                <h2>请输入 Mihomo 控制面板密钥</h2>
+                <input id="secretInput" type="password" placeholder="请输入密钥" autofocus />
+                <button id="secretSubmitBtn">进入</button>
+                <div id="secretError"></div>
+            </div>
+        </div>
+        <div class="container">
+            <nav class="sidebar">
+                <div class="sidebar-top">
+                    <button id="manageBtn" class="nav-button active">管理</button>
+                    <button id="settingsBtn" class="nav-button">设置</button>
+                </div>
+                <div class="sidebar-bottom">
+                    <button id="updateBtn" class="nav-button">更新</button>
+                </div>
+            </nav>
+            <main class="content">
+                <iframe id="uiFrame" src=""></iframe>
+                <div id="settingsView" class="settings-view" style="display: none">
+                    <h2>设置选项</h2>
+                    <ul>
+                        <li>
+                            <label><input type="checkbox" id="skipCnIp" /> 跳过国内IP</label>
+                        </li>
+                        <li>
+                            <label><input type="checkbox" id="enableQuic" /> 启用QUIC</label>
+                        </li>
+                        <li>
+                            <label><input type="checkbox" id="enableTransparentProxy" /> 启用服务器本地透明代理</label>
+                        </li>
+                        <li>
+                            <label for="configFileUrl">配置文件地址设置:</label>
+                            <input type="text" id="configFileUrl" name="configFileUrl" placeholder="例如: http://example.com/config.yaml" />
+                        </li>
+                        <li>
+                            <label for="mihomoApiKey">mihomo控制面板密钥:</label>
+                            <input type="text" id="mihomoApiKey" name="mihomoApiKey" placeholder="请输入密钥" />
+                        </li>
+                        <li>
+                            <label for="githubProxy">GitHub代理设置:</label>
+                            <input type="text" id="githubProxy" name="githubProxy" placeholder="例如: http://localhost:7890" />
+                        </li>
+                    </ul>
+                    <button id="saveSettingsBtn" class="nav-button" style="background-color: #4caf50; width: auto; padding: 10px 20px; margin-top: 10px">保存设置</button>
+                </div>
+                <div id="logsView" class="logs-view" style="display: none">
+                    <h2>更新日志</h2>
+                    <pre id="logOutput">点击"更新"按钮开始获取日志...</pre>
+                </div>
+            </main>
+        </div>
+        <script>
+            // 解析ANSI颜色代码为HTML
+            function parseAnsiColor(text) {
+                // 创建一个文档片段来保存结果
+                const fragment = document.createDocumentFragment();
+                const container = document.createElement("div");
+                fragment.appendChild(container);
+
+                // 颜色映射表
+                const colorClasses = {
+                    30: "black",
+                    31: "red",
+                    32: "green",
+                    33: "yellow",
+                    34: "blue",
+                    35: "magenta",
+                    36: "cyan",
+                    37: "white",
+                    90: "gray",
+                    91: "lightred",
+                    92: "lightgreen",
+                    93: "lightyellow",
+                    94: "lightblue",
+                    95: "lightmagenta",
+                    96: "lightcyan",
+                    97: "lightwhite",
+                };
+
+                // 当前样式
+                let currentSpan = document.createElement("span");
+                container.appendChild(currentSpan);
+
+                // 正则表达式匹配ANSI颜色代码
+                const regex = /\[(\d+(?:;\d+)*)m/g;
+                let lastIndex = 0;
+                let match;
+
+                while ((match = regex.exec(text)) !== null) {
+                    // 添加匹配前的文本
+                    currentSpan.appendChild(document.createTextNode(text.substring(lastIndex, match.index)));
+
+                    // 更新lastIndex以跳过匹配项
+                    lastIndex = match.index + match[0].length;
+
+                    // 处理颜色代码
+                    const codes = match[1].split(";");
+
+                    // 创建新的span用于应用新样式
+                    currentSpan = document.createElement("span");
+
+                    // 应用样式
+                    for (const code of codes) {
+                        if (code === "0") {
+                            // 重置样式 - 不添加任何类
+                        } else if (code === "1") {
+                            // 粗体
+                            currentSpan.style.fontWeight = "bold";
+                        } else if (colorClasses[code]) {
+                            // 文本颜色
+                            currentSpan.classList.add(colorClasses[code]);
+                        } else if (code >= 40 && code <= 47) {
+                            // 背景色 - 目前不处理背景色
+                        }
+                    }
+
+                    container.appendChild(currentSpan);
+                }
+
+                // 添加剩余文本
+                if (lastIndex < text.length) {
+                    currentSpan.appendChild(document.createTextNode(text.substring(lastIndex)));
+                }
+
+                return container.innerHTML;
+            }
+
+            // 密钥校验逻辑
+            function checkSecret(secret) {
+                return fetch("/check_secret", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ secret }),
+                }).then((r) => r.json());
+            }
+
+            function showAuthOverlay(show) {
+                document.getElementById("authOverlay").style.display = show ? "flex" : "none";
+            }
+
+            async function requireSecretAuth() {
+                let savedSecret = localStorage.getItem("mihomo_secret") || "";
+                if (savedSecret) {
+                    let res = await checkSecret(savedSecret);
+                    if (res.success) {
+                        showAuthOverlay(false);
+                        return true;
+                    }
+                }
+                showAuthOverlay(true);
+                return false;
+            }
+
+            document.addEventListener("DOMContentLoaded", async () => {
+                // 密钥输入界面逻辑
+                const secretInput = document.getElementById("secretInput");
+                const secretSubmitBtn = document.getElementById("secretSubmitBtn");
+                const secretError = document.getElementById("secretError");
+
+                async function handleSecretSubmit() {
+                    const secret = secretInput.value.trim();
+                    secretError.style.display = "none";
+                    const res = await checkSecret(secret);
+                    if (res.success) {
+                        localStorage.setItem("mihomo_secret", secret);
+                        showAuthOverlay(false);
+                        location.reload(); // 刷新页面进入主界面
+                    } else {
+                        secretError.textContent = res.msg || "密钥错误";
+                        secretError.style.display = "block";
+                    }
+                }
+                secretSubmitBtn.addEventListener("click", handleSecretSubmit);
+                secretInput.addEventListener("keydown", (e) => {
+                    if (e.key === "Enter") handleSecretSubmit();
+                });
+
+                // 页面加载时先校验密钥
+                await requireSecretAuth();
+
+                const manageBtn = document.getElementById("manageBtn");
+                const settingsBtn = document.getElementById("settingsBtn");
+                const updateBtn = document.getElementById("updateBtn");
+                const saveSettingsBtn = document.getElementById("saveSettingsBtn");
+
+                const uiFrame = document.getElementById("uiFrame");
+                const settingsView = document.getElementById("settingsView");
+                const logsView = document.getElementById("logsView");
+                const logOutput = document.getElementById("logOutput");
+
+                // 设置iframe的src为动态获取的IP地址
+                const currentIp = window.location.hostname;
+                uiFrame.src = `http://${currentIp}:9900/ui#/setup?hostname=${currentIp}&port=9900&secret=${encodeURIComponent(localStorage.getItem("mihomo_secret"))}`;
+
+                function showView(viewToShow) {
+                    uiFrame.style.display = "none";
+                    settingsView.style.display = "none";
+                    logsView.style.display = "none";
+                    viewToShow.style.display = "block"; // or 'flex' if it's a flex container
+
+                    if (viewToShow === uiFrame || viewToShow === logsView) {
+                        viewToShow.style.height = "100%"; // Ensure iframe and logs take full height
+                    } else if (viewToShow === settingsView) {
+                        settingsView.style.height = "100%"; // Ensure settings view takes full height and allows internal scroll
+                    }
+                }
+
+                manageBtn.addEventListener("click", () => {
+                    showView(uiFrame);
+                    manageBtn.classList.add("active");
+                    settingsBtn.classList.remove("active");
+                });
+
+                settingsBtn.addEventListener("click", () => {
+                    showView(settingsView);
+                    settingsBtn.classList.add("active");
+                    manageBtn.classList.remove("active");
+
+                    // 获取当前配置
+                    fetchSettings();
+                });
+
+                // 获取配置项并填充表单
+                async function fetchSettings() {
+                    try {
+                        const res = await fetch("/get_settings");
+                        const data = await res.json();
+
+                        if (data.success && data.data) {
+                            const settings = data.data;
+
+                            // 处理已知的配置项控件
+                            // 复选框配置
+                            const booleanSettings = {
+                                SKIP_CNIP: "skipCnIp",
+                                QUIC: "enableQuic",
+                                LOCAL_LOOPBACK_PROXY: "enableTransparentProxy",
+                            };
+
+                            // 文本输入框配置
+                            const textSettings = {
+                                CONFIG_URL: "configFileUrl",
+                                GITHUB_PROXY: "githubProxy",
+                            };
+
+                            // 处理复选框
+                            for (const [key, elementId] of Object.entries(booleanSettings)) {
+                                const element = document.getElementById(elementId);
+                                if (element && settings[key] !== undefined) {
+                                    element.checked = settings[key] === "true";
+                                }
+                            }
+
+                            // 处理文本输入框
+                            for (const [key, elementId] of Object.entries(textSettings)) {
+                                const element = document.getElementById(elementId);
+                                if (element && settings[key] !== undefined) {
+                                    element.value = settings[key];
+                                }
+                            }
+
+                            // 单独处理MIHOMO_SECRET以防止信息泄露
+                            const mihomoApiKey = document.getElementById("mihomoApiKey");
+                            if (mihomoApiKey) {
+                                mihomoApiKey.value = ""; // 不暴露密钥
+                            }
+                        }
+                    } catch (error) {
+                        console.error("获取配置失败:", error);
+                    }
+                }
+
+                updateBtn.addEventListener("click", async () => {
+                    showView(logsView); // Show logs view first
+                    manageBtn.classList.remove("active"); // Deactivate manage/settings buttons
+                    settingsBtn.classList.remove("active");
+                    logOutput.textContent = "正在连接到服务器获取日志...";
+
+                    try {
+                        const response = await fetch("/reload", {
+                            method: "GET",
+                        });
+
+                        if (!response.ok) {
+                            throw new Error(`HTTP error! status: ${response.status}`);
+                        }
+
+                        // 始终使用流式处理方式读取响应
+                        const reader = response.body.getReader();
+                        const decoder = new TextDecoder();
+
+                        // 清空旧内容
+                        logOutput.innerHTML = "";
+
+                        async function readStream() {
+                            try {
+                                while (true) {
+                                    const { done, value } = await reader.read();
+
+                                    if (done) {
+                                        logOutput.innerHTML += "\n日志流结束。";
+                                        break;
+                                    }
+
+                                    // 追加新内容
+                                    const text = decoder.decode(value, { stream: true });
+                                    // 使用innerHTML来支持HTML格式
+                                    const parsedHtml = parseAnsiColor(text);
+                                    logOutput.innerHTML += parsedHtml;
+
+                                    // 自动滚动到底部
+                                    logOutput.scrollTop = logOutput.scrollHeight;
+                                }
+                            } catch (err) {
+                                logOutput.innerHTML += `\n读取日志流时出错: ${err.message}`;
+                                console.error("Error reading stream:", err);
+                            }
+                        }
+
+                        readStream();
+                    } catch (error) {
+                        logOutput.innerHTML += `\n无法连接到 /reload: ${error.message}\n请检查后台服务是否正在运行。`;
+                        console.error("Error fetching /reload:", error);
+                    }
+                });
+
+                if (saveSettingsBtn) {
+                    saveSettingsBtn.addEventListener("click", async () => {
+                        const mihomoSecret = localStorage.getItem("mihomo_secret") || "";
+                        const settings = {
+                            SKIP_CNIP: document.getElementById("skipCnIp").checked ? "true" : "false",
+                            QUIC: document.getElementById("enableQuic").checked ? "true" : "false",
+                            LOCAL_LOOPBACK_PROXY: document.getElementById("enableTransparentProxy").checked ? "true" : "false",
+                            CONFIG_URL: document.getElementById("configFileUrl").value,
+                            MIHOMO_SECRET: document.getElementById("mihomoApiKey").value,
+                            GITHUB_PROXY: document.getElementById("githubProxy").value,
+                            secret: mihomoSecret,
+                        };
+                        try {
+                            const res = await fetch("/save_settings", {
+                                method: "POST",
+                                headers: { "Content-Type": "application/json" },
+                                body: JSON.stringify(settings),
+                            });
+                            const result = await res.json();
+                            if (result.success) {
+                                // 保存成功后直接触发更新按钮的点击事件，重用现有代码
+                                updateBtn.click();
+                            } else {
+                                alert("保存失败：" + (result.msg || "未知错误"));
+                            }
+                        } catch (e) {
+                            alert("保存失败：" + e.message);
+                        }
+                    });
+                }
+
+                // Initial view
+                showView(uiFrame);
+            });
+        </script>
+    </body>
+</html>

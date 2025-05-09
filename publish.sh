@@ -12,7 +12,7 @@ else
 fi
 
 # 配置变量
-LOCAL_FILES=("auto_task.sh" "install.sh" "entrypoint_mihomo.sh" ".env")
+LOCAL_FILES=("auto_task.sh" "install.sh" "entrypoint_mihomo.sh" ".env" "main.py" "ui.html")
 
 # 颜色定义
 GREEN='\033[0;32m'
@@ -44,7 +44,7 @@ scp ${LOCAL_FILES[@]} $REMOTE_USER@$REMOTE_HOST:$REMOTE_DIR || handle_error "文
 
 # 3. 在远程服务器上执行部署脚本
 log_info "在远程服务器上执行部署脚本..."
-ssh $REMOTE_USER@$REMOTE_HOST "chmod +x $REMOTE_DIR/auto_task.sh && $REMOTE_DIR/auto_task.sh" || handle_error "远程执行脚本失败"
+ssh $REMOTE_USER@$REMOTE_HOST "chmod +x $REMOTE_DIR/auto_task.sh && $REMOTE_DIR/auto_task.sh && systemctl restart mihomo-manager.service" || handle_error "远程执行脚本失败"
 
 log_info "部署完成！"
 exit 0
