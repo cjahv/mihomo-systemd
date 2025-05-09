@@ -83,17 +83,8 @@ setup_nftables
 
 echo "*** Starting Mihomo ***"
 
-if [ -n "$DEBUG" ]; then
-    echo "Debug模式已启用，容器将在命令失败后保持运行"
-    if [ $# -eq 0 ]; then
-        mihomo -d $WORK_DIR || { echo "命令执行失败，保持容器运行中..."; tail -f /dev/null; }
-    else
-        "$@" || { echo "命令执行失败，保持容器运行中..."; tail -f /dev/null; }
-    fi
+if [ $# -eq 0 ]; then
+    exec mihomo -d $WORK_DIR
 else
-    if [ $# -eq 0 ]; then
-        exec mihomo -d $WORK_DIR
-    else
-        exec "$@"
-    fi
+    exec "$@"
 fi
