@@ -369,6 +369,10 @@
                             <label for="githubProxy">GitHub代理设置:</label>
                             <input type="text" id="githubProxy" name="githubProxy" placeholder="例如: http://localhost:7890" />
                         </li>
+                        <li>
+                            <label for="githubApiProxy">GitHub API代理设置:</label>
+                            <input type="text" id="githubApiProxy" name="githubApiProxy" placeholder="例如: http://localhost:7890" />
+                        </li>
                     </ul>
                     <button id="saveSettingsBtn" class="nav-button" style="background-color: #4caf50; width: auto; padding: 10px 20px; margin-top: 10px">保存设置</button>
                 </div>
@@ -570,6 +574,7 @@
                             const textSettings = {
                                 CONFIG_URL: "configFileUrl",
                                 GITHUB_PROXY: "githubProxy",
+                                GITHUB_API_PROXY: "githubApiProxy",
                             };
 
                             // 处理复选框
@@ -663,6 +668,7 @@
                             CONFIG_URL: document.getElementById("configFileUrl").value,
                             MIHOMO_SECRET: document.getElementById("mihomoApiKey").value,
                             GITHUB_PROXY: document.getElementById("githubProxy").value,
+                            GITHUB_API_PROXY: document.getElementById("githubApiProxy").value,
                             secret: mihomoSecret,
                         };
                         try {
