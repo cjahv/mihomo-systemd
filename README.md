@@ -26,19 +26,28 @@
 Debian/Ubuntu系统安装命令：
 
 ```bash
-sudo apt update && sudo apt install -y curl grep awk jq sudo git nftables
+apt update && apt install -y curl jq sudo git nftables
 ```
 
 CentOS/RHEL/Fedora系统安装命令：
 
 ```bash
-sudo yum install -y curl grep gawk jq sudo git nftables
+yum install -y curl jq sudo git nftables
+```
+
+#### mikefarah/yq
+
+安装 [mikefarah/yq](https://github.com/mikefarah/yq)：
+
+```bash
+wget https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 -O /usr/local/bin/yq &&\
+    chmod +x /usr/local/bin/yq
 ```
 
 #### 部署流程
 
 ```bash
-git clone https://github.com/your-username/mihomo-systemd.git
+git clone https://github.com/cjahv/mihomo-systemd.git
 cd mihomo-systemd && chmod +x auto_task.sh
 ./auto_task.sh          # 一键完成安装、配置与启动
 

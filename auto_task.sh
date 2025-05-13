@@ -6,14 +6,6 @@
 # 强制切换到脚本所在目录
 cd "$(dirname "$0")" || exit 1
 
-# 读取环境变量
-if [ -f ".env" ]; then
-    source .env
-else
-    log_error "未找到.env文件，请先创建.env文件"
-    exit 1
-fi
-
 # 配置变量
 CN_CIDR_URL="${GITHUB_PROXY}https://raw.githubusercontent.com/herrbischoff/country-ip-blocks/refs/heads/master/ipv4/cn.cidr"
 CURRENT_DIR="$(pwd)"
@@ -74,7 +66,7 @@ handle_error() {
 
 # 检查mihomo命令是否存在
 check_mihomo() {
-    if ! command -v mihomo &> /dev/null; then
+    if ! mihomo -v &> /dev/null; then
         log_warn "mihomo命令未找到，准备安装..."
         chmod +x ./install.sh
         log_info "执行安装脚本..."
@@ -193,6 +185,14 @@ EOF
         log_info "mihomo-manager服务已安装"
     fi
 }
+
+# 读取环境变量
+if [ -f ".env" ]; then
+    source .env
+else
+    log_error "未找到.env文件，请先创建.env文件"
+    exit 1
+fi
 
 # 检查并安装mihomo
 check_mihomo

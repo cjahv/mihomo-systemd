@@ -47,9 +47,21 @@ OS=$(uname -s | tr '[:upper:]' '[:lower:]')
 case $ARCH in
   x86_64)
     ARCH="amd64"
+    # 检测CPU指令集支持
+    if grep -q "avx512" /proc/cpuinfo 2>/dev/null; then
+      CPU_FEATURE="v3"
+      info "检测到支持AVX512指令集，将使用v3版本"
+    elif grep -q "avx2" /proc/cpuinfo 2>/dev/null; then
+      CPU_FEATURE="v2"
+      info "检测到支持AVX2指令集，将使用v2版本"
+    else
+      CPU_FEATURE="v1"
+      info "未检测到高级指令集支持，将使用基础版本"
+    fi
     ;;
   aarch64)
     ARCH="arm64"
+    CPU_FEATURE=""
     ;;
   *)
     error "不支持的架构: $ARCH"
@@ -81,15 +93,22 @@ fi
 info "最新版本: $LATEST_VERSION"
 
 # 选择文件格式
-FORMAT="gz"  # 默认格式
-if [ $HAS_DEB -eq 1 ]; then
-  FORMAT="deb"
-  info "检测到 Debian/Ubuntu 系统，将使用 .deb 格式"
-elif [ $HAS_RPM -eq 1 ]; then
-  FORMAT="rpm"
-  info "检测到 RHEL/CentOS/Fedora 系统，将使用 .rpm 格式"
+if [ "$CPU_FEATURE" = "v3" ]; then
+  # 只有v3 CPU才使用系统特定格式
+  FORMAT="gz"  # 默认格式
+  if [ $HAS_DEB -eq 1 ]; then
+    FORMAT="deb"
+    info "检测到 Debian/Ubuntu 系统，将使用 .deb 格式"
+  elif [ $HAS_RPM -eq 1 ]; then
+    FORMAT="rpm"
+    info "检测到 RHEL/CentOS/Fedora 系统，将使用 .rpm 格式"
+  else
+    info "默认使用 .gz 格式"
+  fi
 else
-  info "默认使用 .gz 格式"
+  # 非v3 CPU使用兼容包，只有gz格式
+  FORMAT="gz"
+  info "非v3 CPU，将使用兼容包（gz格式）"
 fi
 
 # 获取发布包列表（从缓存变量中提取）
@@ -98,7 +117,13 @@ RELEASE_FILES=$(echo "$RELEASE_JSON" | jq -r '.assets[].name')
 
 # 根据系统信息筛选适合的文件
 info "正在筛选适合 ${OS}-${ARCH}-${FORMAT} 的文件..."
-PATTERN="mihomo-${OS}-${ARCH}.*\.${FORMAT}$"
+if [ "$CPU_FEATURE" = "v3" ]; then
+  # v3 CPU使用正常包
+  PATTERN="mihomo-${OS}-${ARCH}.*\.${FORMAT}$"
+else
+  # 非v3 CPU使用兼容包
+  PATTERN="mihomo-${OS}-${ARCH}-compatible.*\.${FORMAT}$"
+fi
 AVAILABLE_FILES=$(echo "$RELEASE_FILES" | grep -E "$PATTERN" || echo "")
 
 if [ -z "$AVAILABLE_FILES" ]; then
@@ -142,16 +167,18 @@ rm -f "/tmp/${FILENAME}"
 
 # 验证安装
 info "正在验证安装..."
+set +e
 if command -v mihomo &> /dev/null; then
   VERSION_OUTPUT=$(mihomo -v 2>&1)
   if [ $? -eq 0 ]; then
     info "验证成功: ${VERSION_OUTPUT}"
   else
-    warn "mihomo命令存在但返回错误: ${VERSION_OUTPUT}"
+    error "mihomo命令存在但返回错误: ${VERSION_OUTPUT}"
   fi
 else
-  warn "无法执行mihomo命令，请检查安装路径是否在PATH中"
+  error "无法执行mihomo命令，请检查安装路径是否在PATH中"
 fi
+set -e
 
 info "Mihomo 安装成功！"
 
