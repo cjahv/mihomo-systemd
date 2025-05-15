@@ -44,7 +44,5 @@ scp ${LOCAL_FILES[@]} $REMOTE_USER@$REMOTE_HOST:$REMOTE_DIR || handle_error "文
 
 # 3. 在远程服务器上执行部署脚本
 log_info "在远程服务器上执行部署脚本..."
-ssh $REMOTE_USER@$REMOTE_HOST "chmod +x $REMOTE_DIR/auto_task.sh && $REMOTE_DIR/auto_task.sh && systemctl restart mihomo-manager.service" || handle_error "远程执行脚本失败"
-
-log_info "部署完成！"
+ssh $REMOTE_USER@$REMOTE_HOST "chmod +x $REMOTE_DIR/auto_task.sh && $REMOTE_DIR/auto_task.sh && systemctl restart mihomo-manager.service && journalctl -n 1000 -fu mihomo-manager.service"
 exit 0

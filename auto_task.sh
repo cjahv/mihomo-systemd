@@ -6,6 +6,14 @@
 # 强制切换到脚本所在目录
 cd "$(dirname "$0")" || exit 1
 
+# 读取环境变量
+if [ -f ".env" ]; then
+    source .env
+else
+    echo "未找到.env文件，请先创建.env文件"
+    exit 1
+fi
+
 # 配置变量
 CN_CIDR_URL="${GITHUB_PROXY}https://raw.githubusercontent.com/herrbischoff/country-ip-blocks/refs/heads/master/ipv4/cn.cidr"
 CURRENT_DIR="$(pwd)"
@@ -20,6 +28,10 @@ PYTHON_SCRIPT="${CURRENT_DIR}/main.py"
 CONFIG_HASH_FILE="${CURRENT_DIR}/.config_hash"
 CIDR_HASH_FILE="${CURRENT_DIR}/.cidr_hash"
 ENV_HASH_FILE="${CURRENT_DIR}/.env_hash"
+# 中国IP段列表下载时间戳文件
+CIDR_TIMESTAMP_FILE="${CURRENT_DIR}/.cidr_timestamp"
+# 设定下载间隔为1天（秒数）
+DOWNLOAD_INTERVAL=86400
 
 # 配置覆写规则列表 - 格式: "路径=值"
 # 添加新的覆写规则只需在此数组中添加新的项
@@ -109,6 +121,9 @@ WorkingDirectory=${CURRENT_DIR}
 ExecStartPre=/usr/bin/sleep 1s
 ExecStart=${ENTRYPOINT_SCRIPT}
 ExecReload=/bin/kill -HUP \$MAINPID
+TimeoutStopSec=10
+KillMode=process
+KillSignal=SIGTERM
 
 [Install]
 WantedBy=multi-user.target
@@ -171,7 +186,7 @@ ExecStartPre=/usr/bin/sleep 1s
 ExecStop=/bin/kill -SIGTERM \$MAINPID
 KillMode=process
 KillSignal=SIGTERM
-TimeoutStopSec=5
+TimeoutStopSec=10
 
 [Install]
 WantedBy=multi-user.target
@@ -186,14 +201,6 @@ EOF
     fi
 }
 
-# 读取环境变量
-if [ -f ".env" ]; then
-    source .env
-else
-    log_error "未找到.env文件，请先创建.env文件"
-    exit 1
-fi
-
 # 检查并安装mihomo
 check_mihomo
 
@@ -207,15 +214,40 @@ check_mihomo_service
 check_manager_service
 
 # 下载中国IP段列表
-log_info "下载中国IP段列表..."
-if sudo curl -o $CIDR_FILE -L $CN_CIDR_URL; then
-    log_info "中国IP段列表下载成功"
-else
-    if [ -f "$CIDR_FILE" ]; then
-        log_warn "中国IP段列表下载失败，但使用已存在的本地文件继续执行"
+log_info "检查中国IP段列表..."
+download_cidr=true
+
+# 检查时间戳文件是否存在
+if [ -f "$CIDR_TIMESTAMP_FILE" ]; then
+    last_download_time=$(cat "$CIDR_TIMESTAMP_FILE")
+    current_time=$(date +%s)
+    time_diff=$((current_time - last_download_time))
+    
+    if [ $time_diff -lt $DOWNLOAD_INTERVAL ]; then
+        log_info "上次下载中国IP段列表时间小于1天，跳过下载"
+        download_cidr=false
     else
-        handle_error "无法下载中国IP段列表且本地不存在该文件"
+        log_info "距离上次下载已超过1天，准备重新下载"
     fi
+else
+    log_info "未找到下载时间记录，将下载中国IP段列表"
+fi
+
+if [ "$download_cidr" = true ]; then
+    log_info "下载中国IP段列表..."
+    if sudo curl -o $CIDR_FILE -L $CN_CIDR_URL; then
+        log_info "中国IP段列表下载成功"
+        # 更新下载时间戳
+        date +%s > "$CIDR_TIMESTAMP_FILE"
+    else
+        if [ -f "$CIDR_FILE" ]; then
+            log_warn "中国IP段列表下载失败，但使用已存在的本地文件继续执行"
+        else
+            handle_error "无法下载中国IP段列表且本地不存在该文件"
+        fi
+    fi
+else
+    log_info "使用已缓存的中国IP段列表"
 fi
 
 # 下载配置文件
@@ -317,7 +349,15 @@ echo "$current_env_hash" > "$ENV_HASH_FILE"
 
 if [ "$need_restart" = true ]; then
     log_info "重启mihomo服务..."
-    sudo systemctl restart mihomo || handle_error "mihomo服务启动失败"
+    sudo systemctl stop mihomo || true
+    
+    # 等待mihomo进程完全退出
+    while pgrep -x "mihomo" > /dev/null; do
+        log_info "等待mihomo进程退出..."
+        sleep 1
+    done
+    
+    sudo systemctl start mihomo || handle_error "mihomo服务启动失败"
     log_info "mihomo服务已重启"
 else
     log_info "配置和IP段文件均无变化，跳过重启"

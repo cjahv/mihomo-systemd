@@ -340,6 +340,7 @@
                     <button id="settingsBtn" class="nav-button">设置</button>
                 </div>
                 <div class="sidebar-bottom">
+                    <button id="logsBtn" class="nav-button">日志</button>
                     <button id="updateBtn" class="nav-button">更新</button>
                 </div>
             </nav>
@@ -514,6 +515,7 @@
                 const manageBtn = document.getElementById("manageBtn");
                 const settingsBtn = document.getElementById("settingsBtn");
                 const updateBtn = document.getElementById("updateBtn");
+                const logsBtn = document.getElementById("logsBtn");
                 const saveSettingsBtn = document.getElementById("saveSettingsBtn");
 
                 const uiFrame = document.getElementById("uiFrame");
@@ -655,6 +657,61 @@
                     } catch (error) {
                         logOutput.innerHTML += `\n无法连接到 /reload: ${error.message}\n请检查后台服务是否正在运行。`;
                         console.error("Error fetching /reload:", error);
+                    }
+                });
+
+                // 日志按钮点击事件
+                logsBtn.addEventListener("click", async () => {
+                    showView(logsView); // 显示日志视图
+                    manageBtn.classList.remove("active");
+                    settingsBtn.classList.remove("active");
+                    logOutput.textContent = "正在连接到服务器获取mihomo日志...";
+
+                    try {
+                        const response = await fetch("/logs", {
+                            method: "GET",
+                        });
+
+                        if (!response.ok) {
+                            throw new Error(`HTTP error! status: ${response.status}`);
+                        }
+
+                        // 始终使用流式处理方式读取响应
+                        const reader = response.body.getReader();
+                        const decoder = new TextDecoder();
+
+                        // 清空旧内容
+                        logOutput.innerHTML = "";
+
+                        async function readStream() {
+                            try {
+                                while (true) {
+                                    const { done, value } = await reader.read();
+
+                                    if (done) {
+                                        logOutput.innerHTML += "\n日志流结束。";
+                                        break;
+                                    }
+
+                                    // 追加新内容
+                                    const text = decoder.decode(value, { stream: true });
+                                    // 使用innerHTML来支持HTML格式
+                                    const parsedHtml = parseAnsiColor(text);
+                                    logOutput.innerHTML += parsedHtml;
+
+                                    // 自动滚动到底部
+                                    logOutput.scrollTop = logOutput.scrollHeight;
+                                }
+                            } catch (err) {
+                                logOutput.innerHTML += `\n读取日志流时出错: ${err.message}`;
+                                console.error("Error reading stream:", err);
+                            }
+                        }
+
+                        readStream();
+                    } catch (error) {
+                        logOutput.innerHTML += `\n无法连接到 /logs: ${error.message}\n请检查后台服务是否正在运行。`;
+                        console.error("Error fetching /logs:", error);
                     }
                 });
 

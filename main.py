@@ -32,12 +32,18 @@ PORT = get_port()
 MIHOMO_SECRET = get_mihomo_secret()  # 启动时只读取一次
 
 class CustomHandler(http.server.SimpleHTTPRequestHandler):
+    def __init__(self, *args, **kwargs):
+        self.process = None
+        super().__init__(*args, **kwargs)
+
     def do_GET(self):
         if self.path == "/":
             self.path = "/ui.html"
             return super().do_GET()
         if self.path == "/reload":
             self._handle_reload()
+        elif self.path == "/logs":
+            self._handle_logs()
         elif self.path == "/get_settings":
             self._handle_get_settings()
         else:
@@ -59,7 +65,7 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
         self.end_headers()
         
         try:
-            process = subprocess.Popen(
+            self.process = subprocess.Popen(
                 ["./auto_task.sh"], 
                 stdout=subprocess.PIPE, 
                 stderr=subprocess.STDOUT,
@@ -67,15 +73,68 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
                 bufsize=1
             )
             
-            for line in iter(process.stdout.readline, ''):
-                self.wfile.write(line.encode('utf-8'))
-                self.wfile.flush()
+            try:
+                for line in iter(self.process.stdout.readline, ''):
+                    self.wfile.write(line.encode('utf-8'))
+                    self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError):
+                # 客户端关闭连接，终止进程
+                self._terminate_process()
+                return
                 
-            process.stdout.close()
-            process.wait()
+            self.process.stdout.close()
+            self.process.wait()
             
         except Exception as e:
             self.wfile.write(f"执行失败: {e}".encode('utf-8'))
+        finally:
+            self._terminate_process()
+
+    def _handle_logs(self):
+        self.send_response(200)
+        self.send_header("Content-type", "text/plain; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.end_headers()
+        
+        try:
+            self.process = subprocess.Popen(
+                ["journalctl", "-n", "1000", "-fu", "mihomo"], 
+                stdout=subprocess.PIPE, 
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1
+            )
+            
+            try:
+                for line in iter(self.process.stdout.readline, ''):
+                    self.wfile.write(line.encode('utf-8'))
+                    self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError):
+                # 客户端关闭连接，终止进程
+                self._terminate_process()
+                return
+                
+            self.process.stdout.close()
+            self.process.wait()
+            
+        except Exception as e:
+            self.wfile.write(f"执行失败: {e}".encode('utf-8'))
+        finally:
+            self._terminate_process()
+
+    def _terminate_process(self):
+        if self.process and self.process.poll() is None:
+            try:
+                self.process.terminate()
+                self.process.wait(timeout=1)
+            except subprocess.TimeoutExpired:
+                self.process.kill()
+            self.process = None
+
+    def finish(self):
+        self._terminate_process()
+        super().finish()
 
     def _handle_get_settings(self):
         settings = {}
@@ -133,6 +192,8 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
         self.send_error(404, "Not Found")
 
 if __name__ == "__main__":
-    with socketserver.TCPServer(("", PORT), CustomHandler) as httpd:
+    # 设置允许地址重用
+    socketserver.TCPServer.allow_reuse_address = True
+    with socketserver.ThreadingTCPServer(("", PORT), CustomHandler) as httpd:
         print(f"服务已启动，端口：{PORT}")
         httpd.serve_forever()
