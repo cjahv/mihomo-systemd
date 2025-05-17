@@ -37,7 +37,6 @@ DOWNLOAD_INTERVAL=86400
 # 添加新的覆写规则只需在此数组中添加新的项
 CONFIG_OVERRIDES=(
     "dns.listen=0.0.0.0:1053"
-    "dns.ipv6=true"
     "bind-address=*"
     "iptables.enable=false"
     "routing-mark=255"
