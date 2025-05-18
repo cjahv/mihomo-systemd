@@ -38,11 +38,19 @@ handle_error() {
 log_info "创建远程目录: $REMOTE_DIR"
 ssh $REMOTE_USER@$REMOTE_HOST "mkdir -p $REMOTE_DIR" || handle_error "无法创建远程目录"
 
-# 2. 复制文件到远程服务器
+# 2. 检查远程服务器上是否已存在.env文件
+log_info "检查远程服务器上是否已存在.env文件..."
+if ssh $REMOTE_USER@$REMOTE_HOST "[ -f $REMOTE_DIR/.env ]"; then
+    log_info "远程服务器上已存在.env文件，将不上传本地.env文件"
+    # 从LOCAL_FILES数组中移除.env
+    LOCAL_FILES=(${LOCAL_FILES[@]/".env"/})
+fi
+
+# 3. 复制文件到远程服务器
 log_info "复制文件到远程服务器..."
 scp ${LOCAL_FILES[@]} $REMOTE_USER@$REMOTE_HOST:$REMOTE_DIR || handle_error "文件复制失败"
 
-# 3. 在远程服务器上执行部署脚本
+# 4. 在远程服务器上执行部署脚本
 log_info "在远程服务器上执行部署脚本..."
 ssh $REMOTE_USER@$REMOTE_HOST "chmod +x $REMOTE_DIR/auto_task.sh && $REMOTE_DIR/auto_task.sh && systemctl restart mihomo-manager.service && journalctl -n 1000 -fu mihomo-manager.service"
 exit 0
