@@ -23,6 +23,7 @@ SERVICE_FILE="/etc/systemd/system/mihomo.service"
 ENTRYPOINT_SCRIPT="${CURRENT_DIR}/entrypoint_mihomo.sh"
 MANAGER_SERVICE_FILE="/etc/systemd/system/mihomo-manager.service"
 PYTHON_SCRIPT="${CURRENT_DIR}/main.py"
+DNS_LIST="223.5.5.5,1.1.1.1"
 
 # hash缓存文件
 CONFIG_HASH_FILE="${CURRENT_DIR}/.config_hash"
@@ -75,6 +76,125 @@ handle_error() {
     exit 1
 }
 
+# 使用DNS解析下载文件的函数
+download_with_dns_resolution() {
+    local output_file=$1
+    local url=$2
+    shift 2
+    local extra_args=("$@")
+    
+    # 从URL中提取主机名（可能包含端口号）
+    local host_with_port=$(echo "$url" | sed -E 's|^https?://([^/]+).*|\1|')
+    
+    # 分离主机名和端口号
+    local host=$(echo "$host_with_port" | cut -d: -f1)
+    local url_port=$(echo "$host_with_port" | grep -o ':[0-9]\+' | cut -d: -f2)
+    
+    # 检查主机名是否为IP地址
+    if [[ $host =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        log_info "主机名是IP地址，直接使用curl下载"
+        curl -o "$output_file" "${extra_args[@]}" "$url"
+        return $?
+    fi
+    
+    # 确定URL使用的协议和端口
+    local protocol=$(echo "$url" | grep -oP "^https?")
+    local port=80
+    if [[ "$protocol" == "https" ]]; then
+        port=443
+    fi
+    
+    # 如果URL中指定了端口，则使用URL中的端口
+    if [ -n "$url_port" ]; then
+        port="$url_port"
+    fi
+    
+    # 设置DNS服务器列表
+    local dns_servers=()
+    local ip=""
+    
+    # 确保我们获取到的是有效IP地址的函数
+    is_valid_ip() {
+        local ip=$1
+        # 检查是否符合IPv4格式 (x.x.x.x)
+        if [[ $ip =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+            return 0
+        else
+            return 1
+        fi
+    }
+    
+    # 如果用户配置了DNS服务器列表，则使用指定的DNS服务器
+    if [ -n "$DNS_LIST" ]; then
+        # 将DNS_LIST按逗号分割成数组
+        IFS=',' read -ra dns_servers <<< "$DNS_LIST"
+        log_info "使用自定义DNS服务器: $DNS_LIST"
+        
+        # 尝试每一个DNS服务器进行解析
+        for dns in "${dns_servers[@]}"; do
+            log_info "尝试使用DNS服务器 $dns 解析域名 $host..."
+            
+            # 明确要求A记录并确保获取的是IPv4地址
+            local result=$(dig @"$dns" +short "$host" A | grep -v "CNAME" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1)
+            
+            # 如果没有直接获取到有效IP，尝试递归查询
+            if [ -z "$result" ]; then
+                log_info "没有直接获取到A记录，尝试递归查询..."
+                # 尝试通过递归方式解析，跟踪CNAME记录直到找到A记录
+                result=$(dig @"$dns" +trace "$host" | grep -E "^$host.*IN.*A" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | head -n 1)
+            fi
+            
+            # 如果仍然没有获得结果，尝试最后一种方法
+            if [ -z "$result" ]; then
+                log_info "尝试全面查询所有记录..."
+                result=$(dig @"$dns" "$host" +short | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1)
+            fi
+            
+            if [ -n "$result" ] && is_valid_ip "$result"; then
+                ip="$result"
+                log_info "使用DNS服务器 $dns 成功解析域名: $host -> $ip"
+                break
+            else
+                log_warn "使用DNS服务器 $dns 解析域名 $host 失败或没有获取到有效IP地址"
+            fi
+        done
+    else
+        # 使用系统默认DNS服务器
+        log_info "使用系统默认DNS服务器解析域名 $host..."
+        
+        # 明确要求A记录并确保获取的是IPv4地址
+        local result=$(dig +short "$host" A | grep -v "CNAME" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1)
+        
+        # 如果没有直接获取到有效IP，尝试递归查询
+        if [ -z "$result" ]; then
+            log_info "没有直接获取到A记录，尝试递归查询..."
+            result=$(dig +trace "$host" | grep -E "^$host.*IN.*A" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | head -n 1)
+        fi
+        
+        # 如果仍然没有获得结果，尝试最后一种方法
+        if [ -z "$result" ]; then
+            log_info "尝试全面查询所有记录..."
+            result=$(dig "$host" +short | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1)
+        fi
+        
+        if [ -n "$result" ] && is_valid_ip "$result"; then
+            ip="$result"
+            log_info "系统DNS成功解析域名: $host -> $ip"
+        fi
+    fi
+    
+    if [ -z "$ip" ]; then
+        log_error "无法解析域名 $host 为有效IP地址，尝试直接使用curl下载"
+        curl -o "$output_file" "${extra_args[@]}" "$url"
+        return $?
+    fi
+    
+    log_info "域名 $host 解析为IP: $ip，端口: $port，使用--resolve参数下载"
+    # 使用--resolve参数指定域名解析
+    curl -o "$output_file" "${extra_args[@]}" --resolve "${host}:${port}:${ip}" "$url"
+    return $?
+}
+
 # 检查mihomo命令是否存在
 check_mihomo() {
     if ! mihomo -v &> /dev/null; then
@@ -91,7 +211,7 @@ check_mihomo() {
 ensure_entrypoint_executable() {
     if [ -f "$ENTRYPOINT_SCRIPT" ]; then
         log_info "确保入口脚本有执行权限..."
-        sudo chmod +x "$ENTRYPOINT_SCRIPT" || handle_error "设置入口脚本执行权限失败"
+        chmod +x "$ENTRYPOINT_SCRIPT" || handle_error "设置入口脚本执行权限失败"
     else
         handle_error "入口脚本 $ENTRYPOINT_SCRIPT 不存在"
     fi
@@ -104,7 +224,7 @@ check_mihomo_service() {
         log_info "动态创建mihomo服务文件..."
         
         # 创建服务文件内容
-        sudo tee $SERVICE_FILE > /dev/null << EOF
+        tee $SERVICE_FILE > /dev/null << EOF
 [Unit]
 Description=mihomo Daemon, Another Clash Kernel.
 After=network.target NetworkManager.service systemd-networkd.service iwd.service
@@ -128,8 +248,8 @@ KillSignal=SIGTERM
 WantedBy=multi-user.target
 EOF
         
-        sudo systemctl daemon-reload || handle_error "systemd重载失败"
-        sudo systemctl enable mihomo.service || handle_error "mihomo服务启用失败"
+        systemctl daemon-reload || handle_error "systemd重载失败"
+        systemctl enable mihomo.service || handle_error "mihomo服务启用失败"
         log_info "mihomo服务安装并启用成功"
     else
         log_info "mihomo服务已安装"
@@ -162,7 +282,7 @@ check_manager_service() {
     fi
     
     # 确保Python脚本有执行权限
-    sudo chmod +x "$PYTHON_SCRIPT" || handle_error "设置Python脚本执行权限失败"
+    chmod +x "$PYTHON_SCRIPT" || handle_error "设置Python脚本执行权限失败"
     
     # 检查manager服务是否已启用
     if ! systemctl --quiet is-enabled mihomo-manager.service 2>/dev/null; then
@@ -170,7 +290,7 @@ check_manager_service() {
         log_info "动态创建mihomo-manager服务文件..."
         
         # 创建服务文件内容
-        sudo tee $MANAGER_SERVICE_FILE > /dev/null << EOF
+        tee $MANAGER_SERVICE_FILE > /dev/null << EOF
 [Unit]
 Description=Mihomo Manager Service
 After=network.target
@@ -191,9 +311,9 @@ TimeoutStopSec=10
 WantedBy=multi-user.target
 EOF
         
-        sudo systemctl daemon-reload || handle_error "systemd重载失败"
-        sudo systemctl enable mihomo-manager.service || handle_error "mihomo-manager服务启用失败"
-        sudo systemctl start mihomo-manager.service
+        systemctl daemon-reload || handle_error "systemd重载失败"
+        systemctl enable mihomo-manager.service || handle_error "mihomo-manager服务启用失败"
+        systemctl start mihomo-manager.service
         log_info "mihomo-manager服务安装并启用成功"
     else
         log_info "mihomo-manager服务已安装"
@@ -216,8 +336,12 @@ check_manager_service
 log_info "检查中国IP段列表..."
 download_cidr=true
 
-# 检查时间戳文件是否存在
-if [ -f "$CIDR_TIMESTAMP_FILE" ]; then
+# 检查是否跳过下载中国IP段列表
+if [ "${SKIP_CNIP}" = "true" ]; then
+    log_info "SKIP_CNIP=true，跳过下载中国IP段列表"
+    download_cidr=false
+# 如果不跳过，则检查时间间隔
+elif [ -f "$CIDR_TIMESTAMP_FILE" ]; then
     last_download_time=$(cat "$CIDR_TIMESTAMP_FILE")
     current_time=$(date +%s)
     time_diff=$((current_time - last_download_time))
@@ -234,7 +358,7 @@ fi
 
 if [ "$download_cidr" = true ]; then
     log_info "下载中国IP段列表..."
-    if sudo curl -o $CIDR_FILE -L $CN_CIDR_URL; then
+    if download_with_dns_resolution "$CIDR_FILE" "$CN_CIDR_URL" -L; then
         log_info "中国IP段列表下载成功"
         # 更新下载时间戳
         date +%s > "$CIDR_TIMESTAMP_FILE"
@@ -251,7 +375,7 @@ fi
 
 # 下载配置文件
 log_info "下载配置文件..."
-if sudo curl -o $CONFIG_FILE $CONFIG_URL; then
+if download_with_dns_resolution "$CONFIG_FILE" "$CONFIG_URL"; then
     log_info "配置文件下载成功"
 else
     if [ -f "$CONFIG_FILE" ]; then
@@ -348,7 +472,7 @@ echo "$current_env_hash" > "$ENV_HASH_FILE"
 
 if [ "$need_restart" = true ]; then
     log_info "重启mihomo服务..."
-    sudo systemctl stop mihomo || true
+    systemctl stop mihomo || true
     
     # 等待mihomo进程完全退出
     while pgrep -x "mihomo" > /dev/null; do
@@ -356,7 +480,7 @@ if [ "$need_restart" = true ]; then
         sleep 1
     done
     
-    sudo systemctl start mihomo || handle_error "mihomo服务启动失败"
+    systemctl start mihomo || handle_error "mihomo服务启动失败"
     log_info "mihomo服务已重启"
 else
     log_info "配置和IP段文件均无变化，跳过重启"
