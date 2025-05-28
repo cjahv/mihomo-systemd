@@ -14,6 +14,17 @@ else
     exit 1
 fi
 
+# 特殊处理GITHUB_PROXY和GITHUB_API_PROXY，确保末尾有斜杠
+if [ -n "$GITHUB_PROXY" ] && [[ "$GITHUB_PROXY" != */ ]]; then
+    GITHUB_PROXY="${GITHUB_PROXY}/"
+    log_info "已为GITHUB_PROXY添加末尾斜杠: $GITHUB_PROXY"
+fi
+
+if [ -n "$GITHUB_API_PROXY" ] && [[ "$GITHUB_API_PROXY" != */ ]]; then
+    GITHUB_API_PROXY="${GITHUB_API_PROXY}/"
+    log_info "已为GITHUB_API_PROXY添加末尾斜杠: $GITHUB_API_PROXY"
+fi
+
 # 配置变量
 CN_CIDR_URL="${GITHUB_PROXY}https://raw.githubusercontent.com/herrbischoff/country-ip-blocks/refs/heads/master/ipv4/cn.cidr"
 CURRENT_DIR="$(pwd)"
