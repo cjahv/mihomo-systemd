@@ -7,6 +7,22 @@ export PATH=$PATH:/usr/local/go/bin
 # 关闭apt的交互
 export DEBIAN_FRONTEND=noninteractive
 
+# 读取.env文件
+load_env() {
+  if [ -f ".env" ]; then
+    echo "正在加载 .env 文件..."
+    # 读取.env文件并导出变量
+    set -a  # 自动导出所有变量
+    source .env
+    set +a  # 关闭自动导出
+    echo "已成功加载 .env 文件"
+  else
+    echo "未找到 .env 文件，将使用默认环境变量"
+  fi
+}
+
+# 加载环境变量
+load_env
 
 # 颜色设置
 RED='\033[0;31m'
@@ -388,13 +404,13 @@ install_go_if_needed() {
   GO_URL="https://go.dev/dl/${GO_TARBALL}"
   
   info "下载Go: $GO_URL"
-  if ! curl -L --connect-timeout 30 --max-time 300 -o "/tmp/${GO_TARBALL}" "$GO_URL"; then
+  if ! curl -L --connect-timeout 3 --max-time 300 -o "/tmp/${GO_TARBALL}" "$GO_URL"; then
     # 如果直接下载失败，尝试使用代理
     if [ -n "$GITHUB_API_PROXY" ]; then
       info "直接下载Go失败，尝试使用代理重试..."
       GO_URL_PROXY="${GITHUB_API_PROXY}https://go.dev/dl/${GO_TARBALL}"
       info "使用代理下载Go: $GO_URL_PROXY"
-      if ! curl -L --connect-timeout 30 --max-time 300 -o "/tmp/${GO_TARBALL}" "$GO_URL_PROXY"; then
+      if ! curl -L --connect-timeout 3 --max-time 300 -o "/tmp/${GO_TARBALL}" "$GO_URL_PROXY"; then
         error "Go下载失败（包括代理重试），请检查网络连接"
       fi
     else
