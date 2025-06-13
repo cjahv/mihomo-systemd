@@ -12,7 +12,7 @@ else
 fi
 
 # 配置变量
-LOCAL_FILES=("auto_task.sh" "install.sh" "entrypoint_mihomo.sh" ".env" "main.py" "ui.html")
+LOCAL_FILES=("auto_task.sh" "install.sh" "entrypoint_mihomo.sh" ".env" "main.go" "go.mod" "ui.html" "Makefile")
 
 # 颜色定义
 GREEN='\033[0;32m'
@@ -50,7 +50,19 @@ fi
 log_info "复制文件到远程服务器..."
 scp ${LOCAL_FILES[@]} $REMOTE_USER@$REMOTE_HOST:$REMOTE_DIR || handle_error "文件复制失败"
 
-# 4. 在远程服务器上执行部署脚本
+# 4. 在远程服务器上先安装Go管理器，然后执行部署脚本
+log_info "在远程服务器上安装Go管理器..."
+# 传递GitHub代理环境变量到远程服务器
+REMOTE_ENV_VARS=""
+if [ -n "$GITHUB_PROXY" ]; then
+    REMOTE_ENV_VARS="GITHUB_PROXY='$GITHUB_PROXY' "
+fi
+if [ -n "$GITHUB_API_PROXY" ]; then
+    REMOTE_ENV_VARS="${REMOTE_ENV_VARS}GITHUB_API_PROXY='$GITHUB_API_PROXY' "
+fi
+
+ssh $REMOTE_USER@$REMOTE_HOST "cd $REMOTE_DIR && chmod +x install.sh && ${REMOTE_ENV_VARS}./install.sh"
+
 log_info "在远程服务器上执行部署脚本..."
 ssh $REMOTE_USER@$REMOTE_HOST "chmod +x $REMOTE_DIR/auto_task.sh && $REMOTE_DIR/auto_task.sh && systemctl restart mihomo-manager.service && journalctl -n 1000 -fu mihomo-manager.service"
 exit 0

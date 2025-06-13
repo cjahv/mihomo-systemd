@@ -1,4 +1,75 @@
+# Go编译产物
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+mihomo-manager
+mihomo-manager-*
+
+# Go测试文件
+*.test
+*.out
+*.prof
+
+# Go工作区文件
+go.work
+go.work.sum
+
+# 依赖和缓存
+/vendor/
+.cache/
+
+# IDE和编辑器
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# 系统文件
 .DS_Store
-.env*
-!.env.template
-__pycache__/
+Thumbs.db
+
+# 日志文件
+*.log
+logs/
+
+# 配置文件（可能包含敏感信息）
+.env
+.env.local
+.env.*.local
+
+# 临时文件
+tmp/
+temp/
+
+# 构建输出
+/build/
+/dist/
+
+# 运行时文件
+*.pid
+*.seed
+*.pid.lock
+
+# 覆盖率报告
+coverage.txt
+coverage.html
+
+# Mihomo相关文件
+config.yaml
+cn_cidr.txt
+.config_hash
+.cidr_hash
+.env_hash
+.cidr_timestamp
+ui/
+
+# 备份文件
+*.backup
+*.bak
+
+# 压缩文件
+*.tar.gz
+*.zip

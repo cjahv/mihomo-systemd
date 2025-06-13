@@ -33,7 +33,7 @@ CONFIG_FILE="${CURRENT_DIR}/config.yaml"
 SERVICE_FILE="/etc/systemd/system/mihomo.service"
 ENTRYPOINT_SCRIPT="${CURRENT_DIR}/entrypoint_mihomo.sh"
 MANAGER_SERVICE_FILE="/etc/systemd/system/mihomo-manager.service"
-PYTHON_SCRIPT="${CURRENT_DIR}/main.py"
+GO_MANAGER_BINARY="/usr/local/bin/mihomo-manager"
 DNS_LIST="223.5.5.5,1.1.1.1"
 
 # hash缓存文件
@@ -267,33 +267,16 @@ EOF
     fi
 }
 
-# 检查Python版本并安装manager服务
+# 检查Go管理器并安装manager服务
 check_manager_service() {
-    # 检查Python3是否安装
-    if ! command -v python3 &> /dev/null; then
-        handle_error "未找到Python3，请先安装Python3"
+    # 检查Go管理器是否存在
+    if [ ! -f "$GO_MANAGER_BINARY" ]; then
+        handle_error "Go管理器 $GO_MANAGER_BINARY 不存在，请先运行 install.sh 安装"
     fi
     
-    # 获取Python3的绝对路径
-    PYTHON_PATH=$(which python3)
-    log_info "找到Python3路径: $PYTHON_PATH"
-    
-    # 检查Python版本
-    PYTHON_VERSION=$($PYTHON_PATH --version 2>&1)
-    log_info "Python版本: $PYTHON_VERSION"
-    
-    # 确认是Python3
-    if [[ ! $PYTHON_VERSION =~ ^Python\ 3 ]]; then
-        handle_error "系统Python版本不是Python3，请安装Python3"
-    fi
-    
-    # 检查Python脚本是否存在
-    if [ ! -f "$PYTHON_SCRIPT" ]; then
-        handle_error "Python脚本 $PYTHON_SCRIPT 不存在"
-    fi
-    
-    # 确保Python脚本有执行权限
-    chmod +x "$PYTHON_SCRIPT" || handle_error "设置Python脚本执行权限失败"
+    # 确保Go管理器有执行权限
+    chmod +x "$GO_MANAGER_BINARY" || handle_error "设置Go管理器执行权限失败"
+    log_info "Go管理器检查完成: $GO_MANAGER_BINARY"
     
     # 检查manager服务是否已启用
     if ! systemctl --quiet is-enabled mihomo-manager.service 2>/dev/null; then
@@ -303,7 +286,7 @@ check_manager_service() {
         # 创建服务文件内容
         tee $MANAGER_SERVICE_FILE > /dev/null << EOF
 [Unit]
-Description=Mihomo Manager Service
+Description=Mihomo Manager Service (Go Version)
 After=network.target
 
 [Service]
@@ -311,7 +294,7 @@ Type=simple
 Restart=always
 RestartSec=1
 WorkingDirectory=${CURRENT_DIR}
-ExecStart=${PYTHON_PATH} ${PYTHON_SCRIPT}
+ExecStart=${GO_MANAGER_BINARY}
 ExecStartPre=/usr/bin/sleep 1s
 ExecStop=/bin/kill -SIGTERM \$MAINPID
 KillMode=process
