@@ -173,7 +173,7 @@ install_mihomo_core() {
         
         # 获取最新版本
         info "正在获取 Mihomo 最新版本..."
-        RELEASE_JSON=$(curl -s --compressed ${GITHUB_API_PROXY}https://api.github.com/repos/MetaCubeX/mihomo/releases/latest)
+        RELEASE_JSON=$(curl -s --connect-timeout 15 --max-time 60 --compressed ${GITHUB_API_PROXY}https://api.github.com/repos/MetaCubeX/mihomo/releases/latest)
         LATEST_VERSION=$(echo "$RELEASE_JSON" | grep "tag_name" | awk -F'"' '{print $4}')
         
         if [ -z "$LATEST_VERSION" ]; then
@@ -202,7 +202,7 @@ install_mihomo_core() {
   # 获取最新版本和发布信息（如果之前没有获取过）
   if [ -z "$LATEST_VERSION" ] || [ -z "$RELEASE_JSON" ]; then
     info "正在获取 Mihomo 最新版本..."
-    RELEASE_JSON=$(curl -s --compressed ${GITHUB_API_PROXY}https://api.github.com/repos/MetaCubeX/mihomo/releases/latest)
+    RELEASE_JSON=$(curl -s --connect-timeout 15 --max-time 60 --compressed ${GITHUB_API_PROXY}https://api.github.com/repos/MetaCubeX/mihomo/releases/latest)
     LATEST_VERSION=$(echo "$RELEASE_JSON" | grep "tag_name" | awk -F'"' '{print $4}')
     
     if [ -z "$LATEST_VERSION" ]; then
@@ -250,7 +250,7 @@ install_mihomo_core() {
 
   # 下载文件
   info "正在下载 Mihomo..."
-  curl -L -o "/tmp/${FILENAME}" "$DOWNLOAD_URL"
+  curl -L --connect-timeout 30 --max-time 300 -o "/tmp/${FILENAME}" "$DOWNLOAD_URL"
 
   # 安装
   info "正在安装 Mihomo..."
@@ -367,10 +367,18 @@ install_go_if_needed() {
   info "未检测到Go，正在自动安装..."
   
   # 获取最新Go版本
-  GO_VERSION=$(curl -s https://go.dev/VERSION?m=text | head -n1)
+  GO_VERSION=$(curl -s --connect-timeout 10 --max-time 30 https://go.dev/VERSION?m=text | head -n1)
   if [ -z "$GO_VERSION" ]; then
-    GO_VERSION="go1.21.5"  # 备用版本
-    warn "无法获取最新Go版本，使用备用版本: $GO_VERSION"
+    # 如果直接获取失败，尝试使用代理
+    if [ -n "$GITHUB_API_PROXY" ]; then
+      info "直接获取Go版本失败，尝试使用代理重试..."
+      GO_VERSION=$(curl -s --connect-timeout 10 --max-time 30 ${GITHUB_API_PROXY}https://go.dev/VERSION?m=text | head -n1)
+    fi
+    
+    if [ -z "$GO_VERSION" ]; then
+      GO_VERSION="go1.21.5"  # 备用版本
+      warn "无法获取最新Go版本，使用备用版本: $GO_VERSION"
+    fi
   fi
   
   info "将安装Go版本: $GO_VERSION"
@@ -380,8 +388,18 @@ install_go_if_needed() {
   GO_URL="https://go.dev/dl/${GO_TARBALL}"
   
   info "下载Go: $GO_URL"
-  if ! curl -L -o "/tmp/${GO_TARBALL}" "$GO_URL"; then
-    error "Go下载失败，请检查网络连接"
+  if ! curl -L --connect-timeout 30 --max-time 300 -o "/tmp/${GO_TARBALL}" "$GO_URL"; then
+    # 如果直接下载失败，尝试使用代理
+    if [ -n "$GITHUB_API_PROXY" ]; then
+      info "直接下载Go失败，尝试使用代理重试..."
+      GO_URL_PROXY="${GITHUB_API_PROXY}https://go.dev/dl/${GO_TARBALL}"
+      info "使用代理下载Go: $GO_URL_PROXY"
+      if ! curl -L --connect-timeout 30 --max-time 300 -o "/tmp/${GO_TARBALL}" "$GO_URL_PROXY"; then
+        error "Go下载失败（包括代理重试），请检查网络连接"
+      fi
+    else
+      error "Go下载失败，请检查网络连接或设置GITHUB_API_PROXY环境变量"
+    fi
   fi
   
   # 验证下载的文件
