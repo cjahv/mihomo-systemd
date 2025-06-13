@@ -392,12 +392,12 @@ install_go_if_needed() {
   info "未检测到Go，正在自动安装..."
   
   # 获取最新Go版本
-  GO_VERSION=$(curl -s --connect-timeout 10 --max-time 30 https://go.dev/VERSION?m=text | head -n1)
+  GO_VERSION=$(curl -s --compressed --connect-timeout 10 --max-time 30 https://go.dev/VERSION?m=text | head -n1)
   if [ -z "$GO_VERSION" ]; then
     # 如果直接获取失败，尝试使用代理
     if [ -n "$GITHUB_API_PROXY" ]; then
       info "直接获取Go版本失败，尝试使用代理重试..."
-      GO_VERSION=$(curl -s --connect-timeout 10 --max-time 30 ${GITHUB_API_PROXY}https://go.dev/VERSION?m=text | head -n1)
+      GO_VERSION=$(curl -s --compressed --connect-timeout 10 --max-time 30 ${GITHUB_API_PROXY}https://go.dev/VERSION?m=text | head -n1)
     fi
     
     if [ -z "$GO_VERSION" ]; then
@@ -413,13 +413,13 @@ install_go_if_needed() {
   GO_URL="https://go.dev/dl/${GO_TARBALL}"
   
   info "下载Go: $GO_URL"
-  if ! curl -L --connect-timeout 3 --max-time 300 -o "/tmp/${GO_TARBALL}" "$GO_URL"; then
+  if ! curl -L --compressed --connect-timeout 3 --max-time 300 -o "/tmp/${GO_TARBALL}" "$GO_URL"; then
     # 如果直接下载失败，尝试使用代理
     if [ -n "$GITHUB_API_PROXY" ]; then
       info "直接下载Go失败，尝试使用代理重试..."
       GO_URL_PROXY="${GITHUB_API_PROXY}https://go.dev/dl/${GO_TARBALL}"
       info "使用代理下载Go: $GO_URL_PROXY"
-      if ! curl -L --connect-timeout 3 --max-time 300 -o "/tmp/${GO_TARBALL}" "$GO_URL_PROXY"; then
+      if ! curl -L --compressed --connect-timeout 3 --max-time 300 -o "/tmp/${GO_TARBALL}" "$GO_URL_PROXY"; then
         error "Go下载失败（包括代理重试），请检查网络连接"
       fi
     else
