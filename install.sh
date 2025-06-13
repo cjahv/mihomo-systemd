@@ -27,12 +27,10 @@ load_env
 # 特殊处理GITHUB_PROXY和GITHUB_API_PROXY，确保末尾有斜杠
 if [ -n "$GITHUB_PROXY" ] && [[ "$GITHUB_PROXY" != */ ]]; then
     GITHUB_PROXY="${GITHUB_PROXY}/"
-    log_info "已为GITHUB_PROXY添加末尾斜杠: $GITHUB_PROXY"
 fi
 
 if [ -n "$GITHUB_API_PROXY" ] && [[ "$GITHUB_API_PROXY" != */ ]]; then
     GITHUB_API_PROXY="${GITHUB_API_PROXY}/"
-    log_info "已为GITHUB_API_PROXY添加末尾斜杠: $GITHUB_API_PROXY"
 fi
 
 # 颜色设置
