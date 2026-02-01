@@ -11,10 +11,30 @@ export DEBIAN_FRONTEND=noninteractive
 load_env() {
   if [ -f ".env" ]; then
     echo "正在加载 .env 文件..."
-    # 读取.env文件并导出变量
-    set -a  # 自动导出所有变量
-    source .env
-    set +a  # 关闭自动导出
+    while IFS= read -r line || [ -n "$line" ]; do
+      line="${line#"${line%%[![:space:]]*}"}"
+      line="${line%"${line##*[![:space:]]}"}"
+      [ -z "$line" ] && continue
+      [[ "$line" == \#* ]] && continue
+      key=""
+      value=""
+      if [[ "$line" =~ ^export[[:space:]]+([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]]; then
+        key="${BASH_REMATCH[1]}"
+        value="${BASH_REMATCH[2]}"
+      elif [[ "$line" =~ ^([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]]; then
+        key="${BASH_REMATCH[1]}"
+        value="${BASH_REMATCH[2]}"
+      fi
+      if [ -n "$key" ]; then
+        value="${value#"${value%%[![:space:]]*}"}"
+        value="${value%"${value##*[![:space:]]}"}"
+        if [[ ( "$value" == \"*\" && "$value" == *\" ) || ( "$value" == \'*\' && "$value" == *\' ) ]]; then
+          value="${value:1:${#value}-2}"
+        fi
+        printf -v "$key" '%s' "$value"
+        export "$key"
+      fi
+    done < ".env"
     echo "已成功加载 .env 文件"
   else
     echo "未找到 .env 文件，将使用默认环境变量"
@@ -66,6 +86,73 @@ warn() {
 error() {
   echo -e "${RED}[错误]${NC} $1"
   exit 1
+}
+
+has_cmd() {
+  command -v "$1" &> /dev/null
+}
+
+sha256_file() {
+  local target="$1"
+  if has_cmd sha256sum; then
+    sha256sum "$target" | awk '{print $1}'
+    return 0
+  fi
+  if has_cmd shasum; then
+    shasum -a 256 "$target" | awk '{print $1}'
+    return 0
+  fi
+  if has_cmd openssl; then
+    openssl dgst -sha256 "$target" | awk '{print $2}'
+    return 0
+  fi
+  return 1
+}
+
+extract_sha256_for_filename() {
+  local text="$1"
+  local filename="$2"
+  if [ -z "$text" ] || [ -z "$filename" ]; then
+    return 1
+  fi
+  printf "%s\n" "$text" | awk -v name="$filename" '
+    BEGIN {IGNORECASE=1}
+    index($0, name) {
+      match($0, /[a-fA-F0-9]{64}/)
+      if (RLENGTH > 0) {
+        print substr($0, RSTART, RLENGTH)
+        exit
+      }
+    }
+  '
+}
+
+download_file() {
+  local url="$1"
+  local output="$2"
+  shift 2
+  curl --fail --show-error --location "$@" -o "$output" "$url"
+}
+
+verify_sha256_if_available() {
+  local expected_hash="$1"
+  local target="$2"
+  if [ -z "$expected_hash" ]; then
+    warn "发布页未提供SHA256，跳过校验"
+    return 0
+  fi
+  if ! has_cmd sha256sum && ! has_cmd shasum && ! has_cmd openssl; then
+    warn "缺少校验工具(sha256sum/shasum/openssl)，跳过校验"
+    return 0
+  fi
+  local actual=""
+  actual=$(sha256_file "$target") || return 1
+  expected_hash=$(printf "%s" "$expected_hash" | tr 'A-F' 'a-f')
+  actual=$(printf "%s" "$actual" | tr 'A-F' 'a-f')
+  if [ "$expected_hash" != "$actual" ]; then
+    error "校验失败: $(basename "$target")"
+  fi
+  return 0
 }
 
 # 获取系统信息
@@ -198,7 +285,7 @@ install_mihomo_core() {
         
         # 获取最新版本
         info "正在获取 Mihomo 最新版本..."
-        RELEASE_JSON=$(curl -s --connect-timeout 15 --max-time 60 --compressed ${GITHUB_API_PROXY}https://api.github.com/repos/MetaCubeX/mihomo/releases/latest)
+        RELEASE_JSON=$(curl -fsS --connect-timeout 15 --max-time 60 --compressed ${GITHUB_API_PROXY}https://api.github.com/repos/MetaCubeX/mihomo/releases/latest)
         LATEST_VERSION=$(echo "$RELEASE_JSON" | grep "tag_name" | awk -F'"' '{print $4}')
         
         if [ -z "$LATEST_VERSION" ]; then
@@ -227,7 +314,7 @@ install_mihomo_core() {
   # 获取最新版本和发布信息（如果之前没有获取过）
   if [ -z "$LATEST_VERSION" ] || [ -z "$RELEASE_JSON" ]; then
     info "正在获取 Mihomo 最新版本..."
-    RELEASE_JSON=$(curl -s --connect-timeout 15 --max-time 60 --compressed ${GITHUB_API_PROXY}https://api.github.com/repos/MetaCubeX/mihomo/releases/latest)
+    RELEASE_JSON=$(curl -fsS --connect-timeout 15 --max-time 60 --compressed ${GITHUB_API_PROXY}https://api.github.com/repos/MetaCubeX/mihomo/releases/latest)
     LATEST_VERSION=$(echo "$RELEASE_JSON" | grep "tag_name" | awk -F'"' '{print $4}')
     
     if [ -z "$LATEST_VERSION" ]; then
@@ -236,6 +323,8 @@ install_mihomo_core() {
     
     info "最新版本: $LATEST_VERSION"
   fi
+
+  RELEASE_BODY=$(echo "$RELEASE_JSON" | jq -r '.body // empty')
 
   # 选择文件格式，优先使用系统包管理器格式
   FORMAT="gz"  # 默认格式
@@ -269,13 +358,22 @@ install_mihomo_core() {
   # 获取第一个匹配的文件（版本最高的）
   FILENAME=$(echo "$AVAILABLE_FILES" | sort -r | head -n 1)
   DOWNLOAD_URL="${GITHUB_PROXY}https://github.com/MetaCubeX/mihomo/releases/download/${LATEST_VERSION}/${FILENAME}"
+  MIHOMO_EXPECTED_HASH=$(extract_sha256_for_filename "$RELEASE_BODY" "$FILENAME" || true)
 
   info "选择的文件: ${FILENAME}"
   info "下载地址: ${DOWNLOAD_URL}"
+  if [ -n "$MIHOMO_EXPECTED_HASH" ]; then
+    info "使用发布页SHA256校验"
+  else
+    warn "发布页未提供SHA256，跳过校验"
+  fi
 
   # 下载文件
   info "正在下载 Mihomo..."
-  curl -L --connect-timeout 30 --max-time 300 -o "/tmp/${FILENAME}" "$DOWNLOAD_URL"
+  if ! download_file "$DOWNLOAD_URL" "/tmp/${FILENAME}" --connect-timeout 30 --max-time 300; then
+    error "Mihomo 下载失败"
+  fi
+  verify_sha256_if_available "$MIHOMO_EXPECTED_HASH" "/tmp/${FILENAME}"
 
   # 安装
   info "正在安装 Mihomo..."
@@ -392,12 +490,12 @@ install_go_if_needed() {
   info "未检测到Go，正在自动安装..."
   
   # 获取最新Go版本
-  GO_VERSION=$(curl -s --compressed --connect-timeout 10 --max-time 30 https://go.dev/VERSION?m=text | head -n1)
+  GO_VERSION=$(curl -fsS --compressed --connect-timeout 10 --max-time 30 https://go.dev/VERSION?m=text | head -n1)
   if [ -z "$GO_VERSION" ]; then
     # 如果直接获取失败，尝试使用代理
     if [ -n "$GITHUB_API_PROXY" ]; then
       info "直接获取Go版本失败，尝试使用代理重试..."
-      GO_VERSION=$(curl -s --compressed --connect-timeout 10 --max-time 30 ${GITHUB_API_PROXY}https://go.dev/VERSION?m=text | head -n1)
+      GO_VERSION=$(curl -fsS --compressed --connect-timeout 10 --max-time 30 ${GITHUB_API_PROXY}https://go.dev/VERSION?m=text | head -n1)
     fi
     
     if [ -z "$GO_VERSION" ]; then
@@ -413,13 +511,13 @@ install_go_if_needed() {
   GO_URL="https://go.dev/dl/${GO_TARBALL}"
   
   info "下载Go: $GO_URL"
-  if ! curl -L --compressed --connect-timeout 3 --max-time 300 -o "/tmp/${GO_TARBALL}" "$GO_URL"; then
+  if ! download_file "$GO_URL" "/tmp/${GO_TARBALL}" --connect-timeout 3 --max-time 300; then
     # 如果直接下载失败，尝试使用代理
     if [ -n "$GITHUB_API_PROXY" ]; then
       info "直接下载Go失败，尝试使用代理重试..."
       GO_URL_PROXY="${GITHUB_API_PROXY}https://go.dev/dl/${GO_TARBALL}"
       info "使用代理下载Go: $GO_URL_PROXY"
-      if ! curl -L --compressed --connect-timeout 3 --max-time 300 -o "/tmp/${GO_TARBALL}" "$GO_URL_PROXY"; then
+      if ! download_file "$GO_URL_PROXY" "/tmp/${GO_TARBALL}" --connect-timeout 3 --max-time 300; then
         error "Go下载失败（包括代理重试），请检查网络连接"
       fi
     else

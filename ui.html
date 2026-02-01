@@ -7,6 +7,14 @@
         <style>
             :root {
                 color-scheme: dark;
+                --bg: #0f1419;
+                --panel: #141b22;
+                --panel-border: #1e2a35;
+                --panel-soft: #11171d;
+                --accent: #4aa3ff;
+                --accent-strong: #78c7ff;
+                --text: #d6dde6;
+                --text-muted: #98a3b3;
             }
 
             body,
@@ -16,59 +24,89 @@
                 height: 100%;
                 width: 100%;
                 font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-                background-color: #1e1e1e;
-                color: #d4d4d4;
-                display: flex;
+                background-color: var(--bg);
+                color: var(--text);
                 overflow: hidden;
             }
 
-            .container {
+            .layout {
                 display: flex;
+                flex-direction: column;
                 width: 100%;
+                height: 100%;
+                box-sizing: border-box;
+                background: radial-gradient(circle at top, #121a22 0%, #0f1419 55%, #0c1014 100%);
+            }
+
+            .workspace {
+                flex: 1;
+                min-width: 0;
+                background: linear-gradient(180deg, #151e26 0%, #11171d 100%);
+                border: 1px solid var(--panel-border);
+                border-radius: 14px;
+                box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+                overflow: hidden;
+                display: flex;
+                flex-direction: column;
                 height: 100%;
             }
 
-            .sidebar {
-                width: 120px;
-                background-color: #252526;
-                padding: 20px;
+            .toolbar {
                 display: flex;
-                flex-direction: column;
-                justify-content: space-between;
-                box-sizing: border-box;
+                align-items: center;
+                gap: 10px;
+                padding: 12px 14px;
+                border-bottom: 1px solid #1c2731;
+                background: rgba(17, 23, 29, 0.8);
             }
 
-            .sidebar-top .nav-button,
-            .sidebar-bottom .nav-button {
-                background-color: #333333;
-                color: #cccccc;
-                border: 0;
-                padding: 10px 15px;
-                margin-bottom: 10px;
+            .toolbar-spacer {
+                flex: 1;
+            }
+
+            .nav-button {
+                background-color: #1a232c;
+                color: var(--text-muted);
+                border: 1px solid transparent;
+                padding: 7px 16px;
                 cursor: pointer;
                 text-align: center;
-                width: 100%;
-                font-size: 14px;
-                transition: background-color 0.2s ease, color 0.2s ease;
+                border-radius: 10px;
+                font-size: 13px;
+                transition: background-color 0.2s ease, color 0.2s ease, border-color 0.2s ease;
             }
 
-            .sidebar-top .nav-button:hover,
-            .sidebar-bottom .nav-button:hover {
-                background-color: #3e3e3e;
-                color: #ffffff;
+            .nav-button:hover {
+                background-color: #1f2a34;
+                color: var(--text);
             }
 
-            .sidebar-top .nav-button.active {
-                background-color: #007acc;
-                color: #ffffff;
+            .nav-button.active {
+                background-color: rgba(74, 163, 255, 0.15);
+                color: var(--accent-strong);
+                border-color: rgba(74, 163, 255, 0.5);
             }
 
-            .content {
-                flex-grow: 1;
-                padding: 0;
-                display: flex;
-                flex-direction: column;
-                overflow: hidden;
+            .nav-button.exit {
+                background-color: #22171c;
+                color: #f2b8b8;
+                border-color: #3a242c;
+            }
+
+            .nav-button.exit:hover {
+                background-color: #2b1c22;
+                color: #ffd4d4;
+            }
+
+            .top-area {
+                min-height: 220px;
+                border-bottom: 1px solid #1c2731;
+                background: rgba(12, 18, 23, 0.5);
+            }
+
+            .bottom-area {
+                flex: 1;
+                min-height: 0;
             }
 
             #uiFrame {
@@ -80,19 +118,27 @@
 
             .settings-view,
             .logs-view {
-                padding: 20px;
+                padding: 18px;
                 box-sizing: border-box;
                 overflow-y: auto;
                 height: 100%;
-                background-color: #1e1e1e;
+                background-color: transparent;
+            }
+
+            .logs-view {
+                display: flex;
+                flex-direction: column;
+                gap: 12px;
             }
 
             .settings-view h2,
             .logs-view h2 {
-                color: #00aaff;
+                color: var(--accent-strong);
                 margin-top: 0;
-                border-bottom: 1px solid #333;
-                padding-bottom: 10px;
+                border-bottom: 1px solid #1c2731;
+                padding-bottom: 8px;
+                font-size: 14px;
+                letter-spacing: 0.2px;
             }
 
             .settings-view ul {
@@ -101,29 +147,31 @@
             }
 
             .settings-view li {
-                margin-bottom: 15px;
-                padding: 10px;
-                background-color: #2a2a2a;
+                margin-bottom: 12px;
+                padding: 12px;
+                background-color: #111820;
+                border: 1px solid #1b2630;
+                border-radius: 10px;
             }
 
             .settings-view label {
                 display: flex;
                 align-items: center;
                 margin-bottom: 8px;
-                color: #b0b0b0;
+                color: var(--text-muted);
                 font-size: 14px;
             }
 
             .settings-view input[type="checkbox"] {
                 margin-right: 10px;
-                accent-color: #007acc;
+                accent-color: var(--accent);
                 position: relative;
                 width: 16px;
                 height: 16px;
                 -webkit-appearance: none;
                 -moz-appearance: none;
                 appearance: none;
-                background-color: #2a2a2a;
+                background-color: #1a232c;
                 cursor: pointer;
             }
 
@@ -134,11 +182,12 @@
                 left: 0;
                 width: 100%;
                 height: 100%;
-                background-color: #3c3c3c;
+                background-color: #1a232c;
+                border-radius: 4px;
             }
 
             .settings-view input[type="checkbox"]:checked::before {
-                background-color: #007acc;
+                background-color: var(--accent);
             }
 
             .settings-view input[type="checkbox"]:checked::after {
@@ -156,32 +205,32 @@
             .settings-view input[type="text"] {
                 width: calc(100% - 20px);
                 padding: 8px 10px;
-                background-color: #3c3c3c;
-                border: 0;
-                color: #d4d4d4;
+                background-color: #1a232c;
+                border: 1px solid #1b2630;
+                border-radius: 8px;
+                color: var(--text);
                 box-sizing: border-box;
             }
 
             .settings-view input[type="text"]:focus-visible {
                 outline: none;
-                background-color: #454545;
-                box-shadow: 0 0 0 2px rgba(0, 122, 204, 0.3);
+                background-color: #1f2a34;
+                box-shadow: 0 0 0 2px rgba(74, 163, 255, 0.3);
             }
 
             .settings-view input[type="checkbox"]:focus-visible {
                 outline: none;
-                box-shadow: 0 0 0 2px rgba(0, 122, 204, 0.3);
+                box-shadow: 0 0 0 2px rgba(74, 163, 255, 0.3);
             }
 
             #logOutput {
-                background-color: #1a1a1a;
-                color: #a0a0a0;
-                padding: 15px;
+                background-color: #0f151b;
+                color: #9aa5b1;
                 white-space: pre-wrap;
                 word-break: break-all;
-                height: calc(100% - 70px);
+                flex: 1;
                 overflow-y: auto;
-                border: 0;
+                border-radius: 10px;
                 font-family: "Consolas", "Monaco", monospace;
                 font-size: 13px;
             }
@@ -238,17 +287,18 @@
             }
 
             #saveSettingsBtn {
-                background-color: #4caf50;
+                background-color: #2c8f5b;
                 width: auto;
-                padding: 10px 20px;
+                padding: 10px 22px;
                 margin-top: 10px;
                 border: 0;
                 color: #ffffff;
                 cursor: pointer;
+                border-radius: 10px;
             }
 
             #saveSettingsBtn:hover {
-                background-color: #45a049;
+                background-color: #32a168;
             }
 
             /* 密钥验证界面样式 */
@@ -259,21 +309,23 @@
                 left: 0;
                 width: 100vw;
                 height: 100vh;
-                background: #1e1e1e;
+                background: #0f1419;
                 display: flex;
                 align-items: center;
                 justify-content: center;
             }
 
             #authContainer {
-                background: #252526;
+                background: #151e26;
+                border: 1px solid #1e2a35;
                 padding: 32px 32px 24px 32px;
                 min-width: 320px;
                 max-width: 90vw;
+                border-radius: 14px;
             }
 
             #authContainer h2 {
-                color: #00aaff;
+                color: var(--accent-strong);
                 margin-top: 0;
                 text-align: center;
             }
@@ -282,38 +334,40 @@
                 width: 100%;
                 padding: 10px 12px;
                 margin: 16px 0 8px 0;
-                background: #333;
+                background: #1a232c;
                 border: 0;
                 color: #fff;
                 font-size: 16px;
                 box-sizing: border-box;
+                border-radius: 10px;
             }
 
             #secretInput:focus-visible {
                 outline: none;
                 background-color: #454545;
-                box-shadow: 0 0 0 2px rgba(0, 122, 204, 0.3);
+                box-shadow: 0 0 0 2px rgba(74, 163, 255, 0.3);
             }
 
             #secretSubmitBtn {
                 width: 100%;
                 padding: 10px 0;
-                background: #007acc;
+                background: #1f6fb2;
                 color: #fff;
                 border: 0;
                 font-size: 16px;
                 cursor: pointer;
                 box-sizing: border-box;
+                border-radius: 10px;
             }
 
             #secretSubmitBtn:hover {
-                background: #0086dd;
+                background: #2580c7;
             }
 
             #secretSubmitBtn:focus-visible {
                 outline: none;
-                background: #0086dd;
-                box-shadow: 0 0 0 2px rgba(0, 122, 204, 0.3);
+                background: #2580c7;
+                box-shadow: 0 0 0 2px rgba(74, 163, 255, 0.3);
             }
 
             #secretError {
@@ -333,55 +387,57 @@
                 <div id="secretError"></div>
             </div>
         </div>
-        <div class="container">
-            <nav class="sidebar">
-                <div class="sidebar-top">
+        <div class="layout">
+            <div class="workspace">
+                <div class="toolbar">
                     <button id="manageBtn" class="nav-button active">管理</button>
                     <button id="settingsBtn" class="nav-button">设置</button>
-                </div>
-                <div class="sidebar-bottom">
                     <button id="logsBtn" class="nav-button">日志</button>
                     <button id="updateBtn" class="nav-button">更新</button>
+                    <div class="toolbar-spacer"></div>
+                    <button id="logoutBtn" class="nav-button exit">退出</button>
                 </div>
-            </nav>
-            <main class="content">
-                <iframe id="uiFrame" src=""></iframe>
-                <div id="settingsView" class="settings-view" style="display: none">
-                    <h2>设置选项</h2>
-                    <ul>
-                        <li>
-                            <label><input type="checkbox" id="skipCnIp" /> 跳过国内IP</label>
-                        </li>
-                        <li>
-                            <label><input type="checkbox" id="enableQuic" /> 启用QUIC</label>
-                        </li>
-                        <li>
-                            <label><input type="checkbox" id="enableTransparentProxy" /> 启用服务器本地透明代理</label>
-                        </li>
-                        <li>
-                            <label for="configFileUrl">配置文件地址设置:</label>
-                            <input type="text" id="configFileUrl" name="configFileUrl" placeholder="例如: http://example.com/config.yaml" />
-                        </li>
-                        <li>
-                            <label for="mihomoApiKey">mihomo控制面板密钥:</label>
-                            <input type="text" id="mihomoApiKey" name="mihomoApiKey" placeholder="请输入密钥" />
-                        </li>
-                        <li>
-                            <label for="githubProxy">GitHub代理设置:</label>
-                            <input type="text" id="githubProxy" name="githubProxy" placeholder="例如: http://localhost:7890" />
-                        </li>
-                        <li>
-                            <label for="githubApiProxy">GitHub API代理设置:</label>
-                            <input type="text" id="githubApiProxy" name="githubApiProxy" placeholder="例如: http://localhost:7890" />
-                        </li>
-                    </ul>
-                    <button id="saveSettingsBtn" class="nav-button" style="background-color: #4caf50; width: auto; padding: 10px 20px; margin-top: 10px">保存设置</button>
+                <div class="top-area" id="topArea" style="display: none">
+                    <div id="settingsView" class="settings-view" style="display: none">
+                        <h2>设置选项</h2>
+                        <ul>
+                            <li>
+                                <label><input type="checkbox" id="skipCnIp" /> 跳过国内IP</label>
+                            </li>
+                            <li>
+                                <label><input type="checkbox" id="enableQuic" /> 启用QUIC</label>
+                            </li>
+                            <li>
+                                <label><input type="checkbox" id="enableTransparentProxy" /> 启用服务器本地透明代理</label>
+                            </li>
+                            <li>
+                                <label for="configFileUrl">配置文件地址设置:</label>
+                                <input type="text" id="configFileUrl" name="configFileUrl" placeholder="例如: http://example.com/config.yaml" />
+                            </li>
+                            <li>
+                                <label for="mihomoApiKey">mihomo控制面板密钥:</label>
+                                <input type="text" id="mihomoApiKey" name="mihomoApiKey" placeholder="请输入密钥" />
+                            </li>
+                            <li>
+                                <label for="githubProxy">GitHub代理设置:</label>
+                                <input type="text" id="githubProxy" name="githubProxy" placeholder="例如: http://localhost:7890" />
+                            </li>
+                            <li>
+                                <label for="githubApiProxy">GitHub API代理设置:</label>
+                                <input type="text" id="githubApiProxy" name="githubApiProxy" placeholder="例如: http://localhost:7890" />
+                            </li>
+                        </ul>
+                        <button id="saveSettingsBtn" class="nav-button">保存设置</button>
+                    </div>
+                    <div id="logsView" class="logs-view" style="display: none">
+                        <h2>更新日志</h2>
+                        <pre id="logOutput">点击"更新"按钮开始获取日志...</pre>
+                    </div>
                 </div>
-                <div id="logsView" class="logs-view" style="display: none">
-                    <h2>更新日志</h2>
-                    <pre id="logOutput">点击"更新"按钮开始获取日志...</pre>
+                <div class="bottom-area" id="uiContainer">
+                    <iframe id="uiFrame" src=""></iframe>
                 </div>
-            </main>
+            </div>
         </div>
         <script>
             // 解析ANSI颜色代码为HTML
@@ -472,6 +528,11 @@
                 document.getElementById("authOverlay").style.display = show ? "flex" : "none";
             }
 
+            function authHeaders() {
+                const secret = localStorage.getItem("mihomo_secret") || "";
+                return secret ? { "X-Mihomo-Secret": secret } : {};
+            }
+
             async function requireSecretAuth() {
                 let savedSecret = localStorage.getItem("mihomo_secret") || "";
                 if (savedSecret) {
@@ -517,8 +578,11 @@
                 const updateBtn = document.getElementById("updateBtn");
                 const logsBtn = document.getElementById("logsBtn");
                 const saveSettingsBtn = document.getElementById("saveSettingsBtn");
+                const logoutBtn = document.getElementById("logoutBtn");
 
                 const uiFrame = document.getElementById("uiFrame");
+                const uiContainer = document.getElementById("uiContainer");
+                const topArea = document.getElementById("topArea");
                 const settingsView = document.getElementById("settingsView");
                 const logsView = document.getElementById("logsView");
                 const logOutput = document.getElementById("logOutput");
@@ -527,29 +591,41 @@
                 const currentIp = window.location.hostname;
                 uiFrame.src = `http://${currentIp}:9900/ui#/setup?hostname=${currentIp}&port=9900&secret=${encodeURIComponent(localStorage.getItem("mihomo_secret"))}`;
 
+                const navButtons = [manageBtn, settingsBtn, logsBtn, updateBtn];
+
+                function setActiveButton(activeButton) {
+                    navButtons.forEach((btn) => {
+                        if (btn === activeButton) {
+                            btn.classList.add("active");
+                        } else {
+                            btn.classList.remove("active");
+                        }
+                    });
+                }
+
                 function showView(viewToShow) {
-                    uiFrame.style.display = "none";
                     settingsView.style.display = "none";
                     logsView.style.display = "none";
-                    viewToShow.style.display = "block"; // or 'flex' if it's a flex container
+                    uiContainer.style.display = "none";
+                    topArea.style.display = "none";
 
-                    if (viewToShow === uiFrame || viewToShow === logsView) {
-                        viewToShow.style.height = "100%"; // Ensure iframe and logs take full height
-                    } else if (viewToShow === settingsView) {
-                        settingsView.style.height = "100%"; // Ensure settings view takes full height and allows internal scroll
+                    if (viewToShow === uiContainer) {
+                        uiContainer.style.display = "block";
+                        return;
                     }
+
+                    topArea.style.display = "block";
+                    viewToShow.style.display = "block";
                 }
 
                 manageBtn.addEventListener("click", () => {
-                    showView(uiFrame);
-                    manageBtn.classList.add("active");
-                    settingsBtn.classList.remove("active");
+                    showView(uiContainer);
+                    setActiveButton(manageBtn);
                 });
 
                 settingsBtn.addEventListener("click", () => {
                     showView(settingsView);
-                    settingsBtn.classList.add("active");
-                    manageBtn.classList.remove("active");
+                    setActiveButton(settingsBtn);
 
                     // 获取当前配置
                     fetchSettings();
@@ -558,7 +634,9 @@
                 // 获取配置项并填充表单
                 async function fetchSettings() {
                     try {
-                        const res = await fetch("/get_settings");
+                        const res = await fetch("/get_settings", {
+                            headers: authHeaders(),
+                        });
                         const data = await res.json();
 
                         if (data.success && data.data) {
@@ -608,13 +686,13 @@
 
                 updateBtn.addEventListener("click", async () => {
                     showView(logsView); // Show logs view first
-                    manageBtn.classList.remove("active"); // Deactivate manage/settings buttons
-                    settingsBtn.classList.remove("active");
+                    setActiveButton(updateBtn);
                     logOutput.textContent = "正在连接到服务器获取日志...";
 
                     try {
                         const response = await fetch("/reload", {
                             method: "GET",
+                            headers: authHeaders(),
                         });
 
                         if (!response.ok) {
@@ -663,13 +741,13 @@
                 // 日志按钮点击事件
                 logsBtn.addEventListener("click", async () => {
                     showView(logsView); // 显示日志视图
-                    manageBtn.classList.remove("active");
-                    settingsBtn.classList.remove("active");
+                    setActiveButton(logsBtn);
                     logOutput.textContent = "正在连接到服务器获取mihomo日志...";
 
                     try {
                         const response = await fetch("/logs", {
                             method: "GET",
+                            headers: authHeaders(),
                         });
 
                         if (!response.ok) {
@@ -718,20 +796,23 @@
                 if (saveSettingsBtn) {
                     saveSettingsBtn.addEventListener("click", async () => {
                         const mihomoSecret = localStorage.getItem("mihomo_secret") || "";
+                        const mihomoSecretValue = document.getElementById("mihomoApiKey").value.trim();
                         const settings = {
                             SKIP_CNIP: document.getElementById("skipCnIp").checked ? "true" : "false",
                             QUIC: document.getElementById("enableQuic").checked ? "true" : "false",
                             LOCAL_LOOPBACK_PROXY: document.getElementById("enableTransparentProxy").checked ? "true" : "false",
                             CONFIG_URL: document.getElementById("configFileUrl").value,
-                            MIHOMO_SECRET: document.getElementById("mihomoApiKey").value,
                             GITHUB_PROXY: document.getElementById("githubProxy").value,
                             GITHUB_API_PROXY: document.getElementById("githubApiProxy").value,
                             secret: mihomoSecret,
                         };
+                        if (mihomoSecretValue) {
+                            settings.MIHOMO_SECRET = mihomoSecretValue;
+                        }
                         try {
                             const res = await fetch("/save_settings", {
                                 method: "POST",
-                                headers: { "Content-Type": "application/json" },
+                                headers: { "Content-Type": "application/json", ...authHeaders() },
                                 body: JSON.stringify(settings),
                             });
                             const result = await res.json();
@@ -748,7 +829,15 @@
                 }
 
                 // Initial view
-                showView(uiFrame);
+                showView(uiContainer);
+                setActiveButton(manageBtn);
+
+                if (logoutBtn) {
+                    logoutBtn.addEventListener("click", () => {
+                        localStorage.removeItem("mihomo_secret");
+                        showAuthOverlay(true);
+                    });
+                }
             });
         </script>
     </body>

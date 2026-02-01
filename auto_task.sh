@@ -6,23 +6,44 @@
 # 强制切换到脚本所在目录
 cd "$(dirname "$0")" || exit 1
 
+load_env_file() {
+    local env_file="$1"
+    if [ ! -f "$env_file" ]; then
+        return 1
+    fi
+
+    while IFS= read -r line || [ -n "$line" ]; do
+        line="${line#"${line%%[![:space:]]*}"}"
+        line="${line%"${line##*[![:space:]]}"}"
+        [ -z "$line" ] && continue
+        [[ "$line" == \#* ]] && continue
+        local key=""
+        local value=""
+        if [[ "$line" =~ ^export[[:space:]]+([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]]; then
+            key="${BASH_REMATCH[1]}"
+            value="${BASH_REMATCH[2]}"
+        elif [[ "$line" =~ ^([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]]; then
+            key="${BASH_REMATCH[1]}"
+            value="${BASH_REMATCH[2]}"
+        fi
+        if [ -n "$key" ]; then
+            value="${value#"${value%%[![:space:]]*}"}"
+            value="${value%"${value##*[![:space:]]}"}"
+            if [[ ( "$value" == \"*\" && "$value" == *\" ) || ( "$value" == \'*\' && "$value" == *\' ) ]]; then
+                value="${value:1:${#value}-2}"
+            fi
+            printf -v "$key" '%s' "$value"
+            export "$key"
+        fi
+    done < "$env_file"
+
+    return 0
+}
+
 # 读取环境变量
-if [ -f ".env" ]; then
-    source .env
-else
+if ! load_env_file ".env"; then
     echo "未找到.env文件，请先创建.env文件"
     exit 1
-fi
-
-# 特殊处理GITHUB_PROXY和GITHUB_API_PROXY，确保末尾有斜杠
-if [ -n "$GITHUB_PROXY" ] && [[ "$GITHUB_PROXY" != */ ]]; then
-    GITHUB_PROXY="${GITHUB_PROXY}/"
-    log_info "已为GITHUB_PROXY添加末尾斜杠: $GITHUB_PROXY"
-fi
-
-if [ -n "$GITHUB_API_PROXY" ] && [[ "$GITHUB_API_PROXY" != */ ]]; then
-    GITHUB_API_PROXY="${GITHUB_API_PROXY}/"
-    log_info "已为GITHUB_API_PROXY添加末尾斜杠: $GITHUB_API_PROXY"
 fi
 
 # 配置变量
@@ -81,6 +102,17 @@ log_warn() {
     echo -e "${YELLOW}[WARN]$(date '+[%Y-%m-%d %H:%M:%S]')${NC} $1"
 }
 
+# 特殊处理GITHUB_PROXY和GITHUB_API_PROXY，确保末尾有斜杠
+if [ -n "$GITHUB_PROXY" ] && [[ "$GITHUB_PROXY" != */ ]]; then
+    GITHUB_PROXY="${GITHUB_PROXY}/"
+    log_info "已为GITHUB_PROXY添加末尾斜杠: $GITHUB_PROXY"
+fi
+
+if [ -n "$GITHUB_API_PROXY" ] && [[ "$GITHUB_API_PROXY" != */ ]]; then
+    GITHUB_API_PROXY="${GITHUB_API_PROXY}/"
+    log_info "已为GITHUB_API_PROXY添加末尾斜杠: $GITHUB_API_PROXY"
+fi
+
 # 错误处理函数
 handle_error() {
     log_error "$1"
@@ -93,6 +125,7 @@ download_with_dns_resolution() {
     local url=$2
     shift 2
     local extra_args=("$@")
+    local curl_args=("--fail" "--show-error" "--location")
     
     # 从URL中提取主机名（可能包含端口号）
     local host_with_port=$(echo "$url" | sed -E 's|^https?://([^/]+).*|\1|')
@@ -104,7 +137,7 @@ download_with_dns_resolution() {
     # 检查主机名是否为IP地址
     if [[ $host =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
         log_info "主机名是IP地址，直接使用curl下载"
-        curl -o "$output_file" "${extra_args[@]}" "$url"
+        curl "${curl_args[@]}" -o "$output_file" "${extra_args[@]}" "$url"
         return $?
     fi
     
@@ -196,13 +229,13 @@ download_with_dns_resolution() {
     
     if [ -z "$ip" ]; then
         log_error "无法解析域名 $host 为有效IP地址，尝试直接使用curl下载"
-        curl -o "$output_file" "${extra_args[@]}" "$url"
+        curl "${curl_args[@]}" -o "$output_file" "${extra_args[@]}" "$url"
         return $?
     fi
     
     log_info "域名 $host 解析为IP: $ip，端口: $port，使用--resolve参数下载"
     # 使用--resolve参数指定域名解析
-    curl -o "$output_file" "${extra_args[@]}" --resolve "${host}:${port}:${ip}" "$url"
+    curl "${curl_args[@]}" -o "$output_file" "${extra_args[@]}" --resolve "${host}:${port}:${ip}" "$url"
     return $?
 }
 
@@ -331,8 +364,8 @@ log_info "检查中国IP段列表..."
 download_cidr=true
 
 # 检查是否跳过下载中国IP段列表
-if [ "${SKIP_CNIP}" = "true" ]; then
-    log_info "SKIP_CNIP=true，跳过下载中国IP段列表"
+if [ "${SKIP_CNIP}" != "true" ]; then
+    log_info "SKIP_CNIP!=true，跳过下载中国IP段列表"
     download_cidr=false
 # 如果不跳过，则检查时间间隔
 elif [ -f "$CIDR_TIMESTAMP_FILE" ]; then
@@ -398,8 +431,8 @@ fi
 # 处理所有覆写规则
 for override in "${CONFIG_OVERRIDES[@]}"; do
     # 分割路径和值
-    path=$(echo $override | cut -d= -f1)
-    value=$(echo $override | cut -d= -f2-)
+    path="${override%%=*}"
+    value="${override#*=}"
     
     log_info "覆写配置: $path=$value"
     
@@ -412,14 +445,16 @@ for override in "${CONFIG_OVERRIDES[@]}"; do
         yq_cmd=".$path = $value"
     else
         # 其他类型作为字符串处理
-        yq_cmd=".$path = \"$value\""
+        escaped_value="${value//\\/\\\\}"
+        escaped_value="${escaped_value//\"/\\\"}"
+        yq_cmd=".$path = \"$escaped_value\""
     fi
     
     # 使用Go版本的yq (mikefarah/yq)命令语法
-    if yq eval "$yq_cmd" -i $CONFIG_FILE; then
+    if yq eval "$yq_cmd" -i "$CONFIG_FILE"; then
         log_info "配置 $path 覆写成功"
     else
-        log_error "配置 $path 覆写失败"
+        handle_error "配置 $path 覆写失败"
     fi
 done
 

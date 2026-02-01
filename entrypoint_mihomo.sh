@@ -4,7 +4,44 @@
 # https://guide.v2fly.org/app/tproxy.html
 
 # 读取环境变量
-source .env
+load_env_file() {
+    local env_file="$1"
+    if [ ! -f "$env_file" ]; then
+        return 1
+    fi
+
+    while IFS= read -r line || [ -n "$line" ]; do
+        line="${line#"${line%%[![:space:]]*}"}"
+        line="${line%"${line##*[![:space:]]}"}"
+        [ -z "$line" ] && continue
+        [[ "$line" == \#* ]] && continue
+        local key=""
+        local value=""
+        if [[ "$line" =~ ^export[[:space:]]+([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]]; then
+            key="${BASH_REMATCH[1]}"
+            value="${BASH_REMATCH[2]}"
+        elif [[ "$line" =~ ^([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]]; then
+            key="${BASH_REMATCH[1]}"
+            value="${BASH_REMATCH[2]}"
+        fi
+        if [ -n "$key" ]; then
+            value="${value#"${value%%[![:space:]]*}"}"
+            value="${value%"${value##*[![:space:]]}"}"
+            if [[ ( "$value" == \"*\" && "$value" == *\" ) || ( "$value" == \'*\' && "$value" == *\' ) ]]; then
+                value="${value:1:${#value}-2}"
+            fi
+            printf -v "$key" '%s' "$value"
+            export "$key"
+        fi
+    done < "$env_file"
+
+    return 0
+}
+
+if ! load_env_file ".env"; then
+    echo "未找到.env文件，请先创建.env文件"
+    exit 1
+fi
 
 SKIP_CNIP=${SKIP_CNIP:-true}
 QUIC=${QUIC:-true}
@@ -13,8 +50,11 @@ LOCAL_LOOPBACK_PROXY=${LOCAL_LOOPBACK_PROXY:-false}
 WORK_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 setup_nftables() {
-    nft flush ruleset
     set -e
+    if nft list table clash >/dev/null 2>&1; then
+        nft flush table clash
+        nft delete table clash
+    fi
     # Create a new table
     nft add table clash
     nft add chain clash PREROUTING { type filter hook prerouting priority 0 \; }
@@ -76,8 +116,13 @@ if [[ "$LOCAL_LOOPBACK_PROXY" != "true" && "$LOCAL_LOOPBACK_PROXY" != "false" ]]
 fi
 
 # Add policy routing to packets marked as 1 delivered locally
-ip rule add fwmark 1 lookup 100
-ip route add local 0.0.0.0/0 dev lo table 100
+if ! ip rule show | grep -Eq 'fwmark 0x0*1 .* lookup 100'; then
+    ip rule add fwmark 1 lookup 100
+fi
+
+if ! ip route show table 100 | grep -Eq '^local 0\.0\.0\.0/0 dev lo'; then
+    ip route add local 0.0.0.0/0 dev lo table 100
+fi
 
 setup_nftables
 
