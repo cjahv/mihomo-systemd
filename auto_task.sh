@@ -47,7 +47,7 @@ if ! load_env_file ".env"; then
 fi
 
 # 配置变量
-CN_CIDR_URL="${GITHUB_PROXY}https://raw.githubusercontent.com/herrbischoff/country-ip-blocks/refs/heads/master/ipv4/cn.cidr"
+CN_CIDR_URL="https://cdn.jsdelivr.net/gh/gaoyifan/china-operator-ip@ip-lists/china.txt"
 CURRENT_DIR="$(pwd)"
 CIDR_FILE="${CURRENT_DIR}/cn_cidr.txt"
 CONFIG_FILE="${CURRENT_DIR}/config.yaml"
