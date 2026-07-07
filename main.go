@@ -79,6 +79,7 @@ func getPort() int {
 
 // CustomHandler 对应Python的CustomHandler类
 type CustomHandler struct {
+	reloadMu sync.Mutex
 }
 
 func (h *CustomHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -130,15 +131,23 @@ func (h *CustomHandler) handleReload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !h.reloadMu.TryLock() {
+		http.Error(w, "更新任务正在执行，请稍后再试", http.StatusConflict)
+		return
+	}
+	defer h.reloadMu.Unlock()
+
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(200)
 
-	ctx, cancel := context.WithCancel(r.Context())
+	ctx := r.Context()
+
+	runCtx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "./auto_task.sh")
+	cmd := exec.CommandContext(runCtx, "./auto_task.sh")
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		fmt.Fprintf(w, "执行失败: %v", err)
@@ -218,10 +227,10 @@ func (h *CustomHandler) streamOutput(w http.ResponseWriter, ctx context.Context,
 			scanner := bufio.NewScanner(r)
 			scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 			for scanner.Scan() {
+				line := scanner.Text() + "\n"
 				select {
+				case lineCh <- line:
 				case <-ctx.Done():
-					return
-				case lineCh <- scanner.Text() + "\n":
 				}
 			}
 			if err := scanner.Err(); err != nil && ctx.Err() == nil {
