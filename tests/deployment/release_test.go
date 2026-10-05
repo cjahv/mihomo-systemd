@@ -1,6 +1,8 @@
 package deployment
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -46,6 +48,17 @@ func TestSHA256MismatchIsRejected(t *testing.T) {
 	cmd := exec.Command("bash", "-c", `source "$1"; verify_asset "$2" "$3"`, "checksum", filepath.Join(repositoryRoot(t), "deploy", "lib", "release.sh"), strings.Repeat("a", 64), file)
 	if err := cmd.Run(); err == nil {
 		t.Fatal("accepted corrupt artifact")
+	}
+}
+
+func TestSHA256SpecialPath(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "artifact \\with 'quote'\nnewline")
+	data := []byte("verified artifact")
+	writeDeploymentFixture(t, file, string(data))
+	digest := sha256.Sum256(data)
+	cmd := exec.Command("bash", "-c", `source "$1"; verify_asset "$2" "$3"`, "checksum", filepath.Join(repositoryRoot(t), "deploy", "lib", "release.sh"), hex.EncodeToString(digest[:]), file)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("valid bytes rejected because of their filename: %v %s", err, out)
 	}
 }
 

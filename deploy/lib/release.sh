@@ -34,8 +34,9 @@ asset_sha256() {
 
 verify_asset() {
     local expected="$1" file="$2" actual
-    if command -v sha256sum >/dev/null; then actual=$(sha256sum "$file"); actual="${actual%% *}"
-    elif command -v shasum >/dev/null; then actual=$(shasum -a 256 "$file"); actual="${actual%% *}"
+    # Hash stdin so GNU's escaped-filename marker cannot become part of the digest.
+    if command -v sha256sum >/dev/null; then actual=$(sha256sum < "$file") || return 1; actual="${actual%% *}"
+    elif command -v shasum >/dev/null; then actual=$(shasum -a 256 < "$file") || return 1; actual="${actual%% *}"
     else return 1
     fi
     [ "$actual" = "$expected" ]

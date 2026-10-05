@@ -11,8 +11,12 @@ import (
 
 // Privileged paths, SSH, compilation and services are confined to the fixture.
 func TestPublishDeployment(t *testing.T) {
-	for _, scenario := range []string{"build-only", "existing-env", "terminal", "new-env", "probe-failure", "unsupported", "build-failure", "env-check-failure", "upload-failure", "checksum-failure", "prepare-failure", "install-failure", "update-failure", "active-update-failure", "manager-failure", "process-mismatch", "interrupted", "recovery-failure", "force", "force-interrupted", "force-prepare-failure", "force-install-failure", "force-update-failure", "force-recovery-failure", "force-pending-restore-failure", "force-invalid-pending-failure", "force-lock-failure"} {
+	for _, scenario := range []string{"build-only", "existing-env", "legacy-shell", "terminal", "new-env", "probe-failure", "unsupported", "build-failure", "env-check-failure", "upload-failure", "checksum-failure", "prepare-failure", "install-failure", "update-failure", "active-update-failure", "manager-failure", "process-mismatch", "interrupted", "recovery-failure", "force", "force-interrupted", "force-prepare-failure", "force-install-failure", "force-update-failure", "force-recovery-failure", "force-pending-restore-failure", "force-invalid-pending-failure", "force-lock-failure"} {
 		t.Run(scenario, func(t *testing.T) {
+			legacyShell := scenario == "legacy-shell"
+			if legacyShell {
+				scenario = "existing-env"
+			}
 			dir := t.TempDir()
 			bin := filepath.Join(dir, "bin")
 			remote := filepath.Join(dir, "remote dir's")
@@ -20,6 +24,13 @@ func TestPublishDeployment(t *testing.T) {
 			units := filepath.Join(dir, "units")
 			for _, p := range []string{bin, remote, systemBin, units} {
 				if err := os.Mkdir(p, 0755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if legacyShell {
+				// macOS ships Bash 3.2. Pin the outer script and fixture children
+				// to the system shell even when the developer's PATH uses Bash 5.x.
+				if err := os.Symlink("/bin/bash", filepath.Join(bin, "bash")); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -215,6 +226,9 @@ printf old-config > "$TEST_REMOTE/config.yaml"
 				args = append(args, "--force")
 			}
 			cmd := exec.Command("bash", args...)
+			if legacyShell {
+				cmd.Path = "/bin/bash"
+			}
 			if scenario == "terminal" {
 				script, err := exec.LookPath("script")
 				if err != nil {

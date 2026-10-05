@@ -46,7 +46,9 @@ handle_error() {
 
 # 远端命令使用 POSIX 单引号，兼容登录 shell 为 sh 的服务器。
 quote_shell() {
-    printf "'%s'" "${1//\'/\'\\\'\'}"
+    # Bash 3.2 interprets literal replacement backslashes differently from 5.x.
+    local escaped="'\\''"
+    printf "'%s'" "${1//\'/$escaped}"
 }
 
 load_env_file .env || handle_error "未找到 .env，请根据 .env.template 创建"
