@@ -1,0 +1,928 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>Mihomo 控制面板</title>
+        <style>
+            :root {
+                color-scheme: dark;
+                /* MetaCubeXD sunset roles; hex fallbacks also work without OKLCH. */
+                --bg: #121c22;
+                --panel: #10191f;
+                --panel-soft: #0d161c;
+                --neutral: #1c2932;
+                --border: #2a3944;
+                --control-border: #576d7d;
+                --text: #a6bed2;
+                --text-strong: #dde7ef;
+                --text-muted: #99adbf;
+                --primary: #ff865b;
+                --on-primary: #281309;
+                --primary-soft: rgba(255, 134, 91, .12);
+                --success: #a6dfae;
+                --warning: #e6cb99;
+                --error: #f1b4b1;
+                --info: #a4dfe9;
+                --accent: #dfb6f2;
+                --overlay-bg: rgba(13, 22, 28, .96);
+                --overlay-glass: rgba(13, 22, 28, .84);
+                --hover-soft: rgba(166, 190, 210, .05);
+                --shadow-floating: 0 8px 32px rgba(0, 0, 0, .24);
+                --radius-field: 8px;
+                --radius-panel: 16px;
+                --motion-fast: 160ms;
+                font-family: Ubuntu, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", system-ui, sans-serif;
+                font-size: 16px;
+                line-height: 1.5;
+            }
+            @supports (color: oklch(22% .019 237.69)) {
+                :root {
+                    --bg: oklch(22% .019 237.69);
+                    --panel: oklch(20% .019 237.69);
+                    --panel-soft: oklch(18% .019 237.69);
+                    --neutral: oklch(26% .019 237.69);
+                    --text: oklch(77.383% .043 245.096);
+                    --primary: oklch(74.703% .158 39.947);
+                    --on-primary: oklch(14.94% .031 39.947);
+                    --success: oklch(85.56% .085 144.778);
+                    --warning: oklch(85.569% .084 74.427);
+                    --error: oklch(85.511% .078 16.886);
+                    --info: oklch(85.559% .085 206.015);
+                }
+            }
+            * { box-sizing: border-box; scrollbar-width: thin; scrollbar-color: var(--primary) transparent; }
+            ::-webkit-scrollbar { width: 6px; height: 6px; }
+            ::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 999px; }
+            html, body { margin: 0; width: 100%; height: 100%; background: var(--bg); color: var(--text); overflow: hidden; }
+            button, input { font: inherit; }
+            button { cursor: pointer; touch-action: manipulation; }
+            button:disabled { cursor: wait; opacity: .55; }
+            :focus-visible { outline: 2px solid var(--primary); outline-offset: 3px; }
+            [hidden] { display: none !important; }
+            .icon-defs { position: absolute; width: 0; height: 0; overflow: hidden; }
+            .icon { width: 22px; height: 22px; flex-shrink: 0; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+            .layout { width: 100%; height: 100%; height: 100dvh; }
+            .workspace { position: relative; display: flex; flex-direction: column; width: 100%; height: 100%; min-height: 0; overflow: hidden; }
+            .toolbar { z-index: 3; flex-shrink: 0; display: flex; align-items: center; gap: 12px;
+                padding: max(10px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) 10px max(16px, env(safe-area-inset-left));
+                background: var(--panel); border-bottom: 1px solid var(--border); }
+            .brand { display: flex; align-items: center; gap: 10px; flex-shrink: 0; min-height: 44px; margin-right: 16px; }
+            .brand-mark { display: block; width: 34px; height: 34px; flex-shrink: 0; color: var(--primary); }
+            .brand-wordmark { color: var(--text-strong); font-size: 1.25rem; font-weight: 750; letter-spacing: -.045em; line-height: 1; }
+            .toolbar-nav { display: flex; gap: 8px; }
+            .toolbar-spacer { flex: 1; }
+            .nav-button { position: relative; display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+                min-height: 44px; padding: 8px 16px; background: var(--neutral); color: var(--text);
+                border: 1px solid var(--border); border-radius: var(--radius-field); font-size: .875rem; font-weight: 500;
+                transition: background-color var(--motion-fast), color var(--motion-fast), border-color var(--motion-fast); }
+            .icon-button { width: 44px; min-width: 44px; height: 44px; padding: 10px; }
+            .nav-button:hover:enabled { background: var(--border); color: var(--text-strong); }
+            .nav-button:active:enabled { background: var(--panel-soft); }
+            .nav-button.active { background: var(--primary-soft); color: var(--primary); border-color: var(--primary); }
+            .nav-button.exit { background: transparent; border-color: transparent; color: var(--text-muted); }
+            .nav-button.exit:hover:enabled { background: var(--neutral); color: var(--error); }
+            .primary-button { background: var(--primary); border-color: var(--primary); color: var(--on-primary); font-weight: 600; }
+            .primary-button:hover:enabled { background: var(--primary); color: var(--on-primary); filter: brightness(1.08); }
+            .primary-button:active:enabled { background: var(--primary); filter: brightness(.92); }
+            .icon-button[data-tooltip]::after { content: attr(data-tooltip); position: absolute; top: calc(100% + 10px); left: 50%;
+                transform: translateX(-50%); visibility: hidden; pointer-events: none; padding: 6px 10px; white-space: nowrap;
+                background: var(--neutral); color: var(--text-strong); border: 1px solid var(--control-border); border-radius: var(--radius-field); font-size: .75rem; font-weight: 400; }
+            .icon-button:hover:enabled::after, .icon-button:focus-visible::after { visibility: visible; }
+            .icon-button.exit::after { left: auto; right: 0; transform: none; }
+            [aria-busy="true"] > .icon { animation: spin 1s linear infinite; }
+            @keyframes spin { to { transform: rotate(360deg); } }
+            .top-area, .bottom-area { flex: 1; min-height: 0; overflow: hidden; }
+            #uiFrame { width: 100%; height: 100%; border: 0; display: block; background: var(--bg); }
+            .settings-view, .logs-view { height: 100%; padding: 24px; }
+            .view-heading { flex-shrink: 0; display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap; margin-bottom: 20px; }
+            .view-heading h1 { margin: 0; color: var(--text-strong); font-size: 1.25rem; line-height: 1.4; font-weight: 700; }
+            .settings-view { overflow: hidden; }
+            .settings-content { max-width: 1000px; margin: 0 auto; height: 100%; min-height: 0; display: flex; flex-direction: column; }
+            .settings-grid { flex: 1; min-height: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px;
+                align-content: start; grid-auto-rows: max-content; overflow-y: auto; overscroll-behavior: contain; scroll-padding: 16px; padding: 8px 4px 16px; }
+            .settings-card { min-width: 0; margin: 0; padding: 20px; border: 1px solid var(--border); border-radius: var(--radius-panel); background: var(--panel); }
+            .settings-card legend { color: var(--text-strong); padding: 0 8px; font-size: 1rem; font-weight: 600; }
+            .settings-card.wide { grid-column: 1 / -1; }
+            .field-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; }
+            .field + .field { margin-top: 20px; }
+            .field-grid .field + .field { margin-top: 0; }
+            .field label { display: block; color: var(--text-strong); font-size: .875rem; font-weight: 500; margin-bottom: 8px; }
+            .field input { width: 100%; min-width: 0; min-height: 44px; padding: 10px 12px; color: var(--text-strong); background: var(--bg);
+                border: 1px solid var(--control-border); border-radius: var(--radius-field); font-size: .875rem; }
+            input::placeholder { color: var(--text-muted); opacity: 1; }
+            .field input:focus-visible { border-color: var(--primary); }
+            .switch-row { display: flex; align-items: center; justify-content: space-between; gap: 20px; min-height: 64px; padding: 12px 0; cursor: pointer; }
+            .switch-row + .switch-row { border-top: 1px solid var(--border); }
+            .switch-copy { min-width: 0; }
+            .switch-copy strong { color: var(--text-strong); font-size: .875rem; font-weight: 500; }
+            .switch-row input { appearance: none; width: 44px; height: 26px; border: 1px solid var(--control-border); border-radius: 999px;
+                background: var(--neutral); flex-shrink: 0; margin: 0; cursor: pointer; position: relative; }
+            .switch-row input::before { content: ""; display: block; position: absolute; top: 3px; left: 3px; width: 18px; height: 18px;
+                background: var(--text); border-radius: 50%; transition: transform var(--motion-fast), background-color var(--motion-fast); }
+            .switch-row input:checked { background: var(--primary); border-color: var(--primary); }
+            .switch-row input:checked::before { transform: translateX(18px); background: var(--on-primary); }
+            .settings-actions { flex-shrink: 0; display: flex; align-items: center; flex-wrap: wrap; gap: 16px; padding: 16px 0 max(16px, env(safe-area-inset-bottom));
+                margin-top: 8px; background: var(--bg); border-top: 1px solid var(--border); }
+            .logs-view { position: relative; display: flex; flex-direction: column; overflow: hidden; }
+            .logs-view .view-heading { flex-shrink: 0; }
+            .log-actions { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+            #logStatus { display: inline-flex; align-items: center; gap: 8px; color: var(--text-muted); font-size: .8125rem; overflow-wrap: anywhere; }
+            #logStatus::before { content: ""; width: 7px; height: 7px; flex-shrink: 0; border-radius: 50%; background: currentColor; }
+            #logStatus[data-state="connected"] { color: var(--success); }
+            #logStatus[data-state="error"] { color: var(--error); }
+            #logOutput { flex: 1; min-height: 0; overflow: auto; overflow-anchor: none; overscroll-behavior: contain;
+                padding: 12px; border-top: 1px solid var(--border); background: var(--panel-soft); color: var(--text-strong);
+                font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace; font-size: .8125rem; line-height: 1.65; tab-size: 4; }
+            #logOutput:empty::after { content: "等待 Mihomo 日志…"; color: var(--text-muted); }
+            .log-line { display: grid; grid-template-columns: 12ch 5ch minmax(24ch, 1fr); column-gap: 1ch; padding: 1px 0; }
+            .log-line time { color: var(--text-muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+            .log-level { color: var(--text-muted); font-weight: 600; }
+            .log-level[data-level="info"] { color: var(--info); }
+            .log-level[data-level="warning"] { color: var(--warning); }
+            .log-level[data-level="error"], .log-level[data-level="fatal"], .log-level[data-level="panic"] { color: var(--error); }
+            .log-level[data-level="debug"], .log-level[data-level="trace"] { color: var(--text-muted); }
+            .log-message { white-space: pre-wrap; overflow-wrap: anywhere; min-width: 0; }
+            .update-overlay { position: absolute; right: max(16px, env(safe-area-inset-right)); bottom: max(16px, env(safe-area-inset-bottom)); z-index: 2;
+                width: 420px; max-width: calc(100% - 32px); border: 1px solid var(--control-border); border-radius: 12px; background: var(--overlay-bg);
+                box-shadow: var(--shadow-floating); }
+            @supports ((backdrop-filter: blur(12px)) or (-webkit-backdrop-filter: blur(12px))) {
+                .update-overlay { background: var(--overlay-glass); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); }
+            }
+            #updateToggle { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 48px; padding: 12px 14px;
+                background: transparent; border: 0; border-radius: 12px; color: var(--text); text-align: left; }
+            #updateToggle > .icon { width: 20px; height: 20px; }
+            .update-copy { flex: 1; min-width: 0; }
+            #updateSummary { display: block; font-size: .875rem; color: var(--text-strong); overflow-wrap: anywhere; line-height: 1.5; }
+            .update-chevron { transition: transform var(--motion-fast); }
+            #updateToggle[aria-expanded="true"] .update-chevron { transform: rotate(180deg); }
+            #updateToggle:hover { background: var(--hover-soft); }
+            #updateHistory { max-height: min(260px, 34vh); overflow-y: auto; overscroll-behavior: contain; padding: 0 14px 8px; }
+            .update-entry { padding: 12px 0; border-top: 1px solid var(--border); white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text); font-size: .8125rem; line-height: 1.7; }
+            .update-overlay[data-state="updated"] #updateSummary, .update-overlay[data-state="unchanged"] #updateSummary { color: var(--success); }
+            .update-overlay[data-state="rolled_back"] #updateSummary, .update-overlay[data-state="rejected"] #updateSummary { color: var(--warning); }
+            .update-overlay[data-state="recovery_failed"] #updateSummary, .update-overlay[data-state="error"] #updateSummary { color: var(--error); }
+            #authOverlay { position: fixed; inset: 0; z-index: 10; display: flex; align-items: center; justify-content: center; overflow-y: auto; padding: 24px; background: var(--bg); }
+            #authContainer { width: 100%; max-width: 400px; padding: 32px; background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius-panel); }
+            .auth-mark { width: 48px; height: 48px; display: grid; place-items: center; margin-bottom: 20px; color: var(--primary); background: var(--primary-soft); border-radius: 12px; }
+            #authContainer h1 { font-size: 1.5rem; color: var(--text-strong); line-height: 1.3; margin: 0 0 8px; }
+            #authContainer h1 { margin-bottom: 24px; }
+            #secretSubmitBtn { width: 100%; margin-top: 20px; }
+            .notifications { position: fixed; z-index: 20; top: max(16px, env(safe-area-inset-top)); right: max(16px, env(safe-area-inset-right));
+                display: flex; flex-direction: column; gap: 10px; width: 400px; max-width: calc(100% - 32px); pointer-events: none; }
+            .toast { pointer-events: auto; padding: 14px 16px; background: var(--panel); border: 1px solid var(--control-border);
+                border-left: 3px solid var(--info); border-radius: 8px; box-shadow: var(--shadow-floating); color: var(--text-strong); font-size: .875rem; overflow-wrap: anywhere; }
+            .toast[data-tone="success"] { border-left-color: var(--success); }
+            .toast[data-tone="warning"] { border-left-color: var(--warning); }
+            .toast[data-tone="error"] { border-left-color: var(--error); }
+            .toast-heading { display: flex; align-items: start; gap: 12px; }
+            .toast-heading strong { flex: 1; font-weight: 600; }
+            .toast-close { border: 0; background: transparent; color: var(--text-muted); padding: 0 4px; min-width: 24px; min-height: 24px; font-size: 1.125rem; line-height: 1; }
+            .toast details { margin-top: 8px; }
+            .toast summary { cursor: pointer; color: var(--text-muted); }
+            .toast-detail { white-space: pre-wrap; max-height: min(280px, 40vh); overflow-y: auto; margin-top: 8px; }
+            @media (max-width: 760px) {
+                .settings-grid, .field-grid { grid-template-columns: minmax(0, 1fr); }
+                .settings-card.wide { grid-column: auto; }
+                .settings-view, .logs-view { padding: 16px; }
+            }
+            @media (max-width: 420px) {
+                .brand { gap: 6px; margin-right: 4px; }
+                .brand-mark { width: 28px; height: 28px; }
+                .brand-wordmark { font-size: 1rem; }
+                .toolbar-nav { gap: 6px; }
+                .toolbar { gap: 8px; padding-left: max(12px, env(safe-area-inset-left)); padding-right: max(12px, env(safe-area-inset-right)); }
+                .settings-card { padding: 16px; }
+                #authContainer { padding: 24px; }
+                .update-overlay { right: 12px; max-width: calc(100% - 24px); }
+            }
+            @media (max-width: 360px) {
+                .brand { gap: 4px; margin-right: 0; }
+                .brand-mark { width: 24px; height: 24px; }
+                .brand-wordmark { font-size: .875rem; }
+                .toolbar { gap: 6px; }
+            }
+            @media (prefers-reduced-motion: reduce) {
+                *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+            }
+        </style>
+    </head>
+    <body>
+        <!-- Tabler Icons https://tabler.io/icons
+MIT License
+
+Copyright (c) 2020-2026 Paweł Kuna
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+-->
+        <svg class="icon-defs" aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg"><symbol id="icon-layout-dashboard" viewBox="0 0 24 24"><path d="M5 4h4a1 1 0 0 1 1 1v6a1 1 0 0 1 -1 1h-4a1 1 0 0 1 -1 -1v-6a1 1 0 0 1 1 -1" />
+  <path d="M5 16h4a1 1 0 0 1 1 1v2a1 1 0 0 1 -1 1h-4a1 1 0 0 1 -1 -1v-2a1 1 0 0 1 1 -1" />
+  <path d="M15 12h4a1 1 0 0 1 1 1v6a1 1 0 0 1 -1 1h-4a1 1 0 0 1 -1 -1v-6a1 1 0 0 1 1 -1" />
+  <path d="M15 4h4a1 1 0 0 1 1 1v2a1 1 0 0 1 -1 1h-4a1 1 0 0 1 -1 -1v-2a1 1 0 0 1 1 -1" /></symbol><symbol id="icon-settings" viewBox="0 0 24 24"><path d="M10.325 4.317c.426 -1.756 2.924 -1.756 3.35 0a1.724 1.724 0 0 0 2.573 1.066c1.543 -.94 3.31 .826 2.37 2.37a1.724 1.724 0 0 0 1.065 2.572c1.756 .426 1.756 2.924 0 3.35a1.724 1.724 0 0 0 -1.066 2.573c.94 1.543 -.826 3.31 -2.37 2.37a1.724 1.724 0 0 0 -2.572 1.065c-.426 1.756 -2.924 1.756 -3.35 0a1.724 1.724 0 0 0 -2.573 -1.066c-1.543 .94 -3.31 -.826 -2.37 -2.37a1.724 1.724 0 0 0 -1.065 -2.572c-1.756 -.426 -1.756 -2.924 0 -3.35a1.724 1.724 0 0 0 1.066 -2.573c-.94 -1.543 .826 -3.31 2.37 -2.37c1 .608 2.296 .07 2.572 -1.065" />
+  <path d="M9 12a3 3 0 1 0 6 0a3 3 0 0 0 -6 0" /></symbol><symbol id="icon-file-text" viewBox="0 0 24 24"><path d="M14 3v4a1 1 0 0 0 1 1h4" />
+  <path d="M17 21h-10a2 2 0 0 1 -2 -2v-14a2 2 0 0 1 2 -2h7l5 5v11a2 2 0 0 1 -2 2" />
+  <path d="M9 9l1 0" />
+  <path d="M9 13l6 0" />
+  <path d="M9 17l6 0" /></symbol><symbol id="icon-refresh" viewBox="0 0 24 24"><path d="M20 11a8.1 8.1 0 0 0 -15.5 -2m-.5 -4v4h4" />
+  <path d="M4 13a8.1 8.1 0 0 0 15.5 2m.5 4v-4h-4" /></symbol><symbol id="icon-logout" viewBox="0 0 24 24"><path d="M14 8v-2a2 2 0 0 0 -2 -2h-7a2 2 0 0 0 -2 2v12a2 2 0 0 0 2 2h7a2 2 0 0 0 2 -2v-2" />
+  <path d="M9 12h12l-3 -3" />
+  <path d="M18 15l3 -3" /></symbol><symbol id="icon-chevron-down" viewBox="0 0 24 24"><path d="M6 9l6 6l6 -6" /></symbol><symbol id="icon-device-floppy" viewBox="0 0 24 24"><path d="M6 4h10l4 4v10a2 2 0 0 1 -2 2h-12a2 2 0 0 1 -2 -2v-12a2 2 0 0 1 2 -2" />
+  <path d="M10 14a2 2 0 1 0 4 0a2 2 0 1 0 -4 0" />
+  <path d="M14 4l0 4l-6 0l0 -4" /></symbol><symbol id="icon-key" viewBox="0 0 24 24"><path d="M16.555 3.843l3.602 3.602a2.877 2.877 0 0 1 0 4.069l-2.643 2.643a2.877 2.877 0 0 1 -4.069 0l-.301 -.301l-6.558 6.558a2 2 0 0 1 -1.239 .578l-.175 .008h-1.172a1 1 0 0 1 -.993 -.883l-.007 -.117v-1.172a2 2 0 0 1 .467 -1.284l.119 -.13l.414 -.414h2v-2h2v-2l2.144 -2.144l-.301 -.301a2.877 2.877 0 0 1 0 -4.069l2.643 -2.643a2.877 2.877 0 0 1 4.069 0" />
+  <path d="M15 9h.01" /></symbol><symbol id="icon-arrow-right" viewBox="0 0 24 24"><path d="M5 12l14 0" />
+  <path d="M13 18l6 -6" />
+  <path d="M13 6l6 6" /></symbol></svg>
+        <div id="authOverlay" role="dialog" aria-modal="true" aria-labelledby="authTitle">
+            <div id="authContainer">
+                <div class="auth-mark"><svg class="icon " aria-hidden="true" focusable="false"><use href="#icon-key"></use></svg></div>
+                <h1 id="authTitle">Mihomo 控制台</h1>
+                <div class="field">
+                    <label for="secretInput">控制面板密钥</label>
+                    <input id="secretInput" type="password" autocomplete="current-password" placeholder="请输入密钥" autofocus />
+                </div>
+                <button id="secretSubmitBtn" class="nav-button primary-button">连接控制台<svg class="icon " aria-hidden="true" focusable="false"><use href="#icon-arrow-right"></use></svg></button>
+            </div>
+        </div>
+        <div id="notifications" class="notifications" aria-label="全局提示"></div>
+        <div class="layout">
+            <div id="workspace" class="workspace">
+                <header class="toolbar">
+                    <div class="brand" role="img" aria-label="Mihomo 服务管理"><svg class="brand-mark" aria-hidden="true" focusable="false" viewBox="0 0 36 36"><path fill="currentColor" d="M3 29V7h6l9 12 9-12h6v22h-7V18l-8 10-8-10v11Z"/><path fill="var(--text-strong)" d="m12 7 6 8 6-8-6 3Z"/></svg><span class="brand-wordmark" aria-hidden="true">Mihomo</span></div>
+                    <nav class="toolbar-nav" aria-label="主导航">
+                        <button id="manageBtn" class="nav-button icon-button active" aria-label="管理面板" aria-pressed="true" data-tooltip="管理面板"><svg class="icon " aria-hidden="true" focusable="false"><use href="#icon-layout-dashboard"></use></svg></button>
+                        <button id="settingsBtn" class="nav-button icon-button" aria-label="服务设置" aria-pressed="false" data-tooltip="服务设置"><svg class="icon " aria-hidden="true" focusable="false"><use href="#icon-settings"></use></svg></button>
+                        <button id="logsBtn" class="nav-button icon-button" aria-label="Mihomo 日志" aria-pressed="false" data-tooltip="Mihomo 日志"><svg class="icon " aria-hidden="true" focusable="false"><use href="#icon-file-text"></use></svg></button>
+                    </nav>
+                    <div class="toolbar-spacer"></div>
+                    <button id="logoutBtn" class="nav-button icon-button exit" aria-label="退出控制台" data-tooltip="退出控制台"><svg class="icon " aria-hidden="true" focusable="false"><use href="#icon-logout"></use></svg></button>
+                </header>
+                <main class="top-area" id="topArea" style="display: none">
+                    <div id="settingsView" class="settings-view" style="display: none">
+                        <div class="settings-content">
+                            <div class="view-heading"><div><h1>服务设置</h1></div></div>
+                            <div class="settings-grid">
+                                <fieldset class="settings-card">
+                                    <legend>网络行为</legend>
+                                    <label class="switch-row" for="skipCnIp"><span class="switch-copy"><strong>国内 IP 直连</strong></span><input type="checkbox" role="switch" id="skipCnIp" /></label>
+                                    <label class="switch-row" for="enableQuic"><span class="switch-copy"><strong>允许 QUIC</strong></span><input type="checkbox" role="switch" id="enableQuic" /></label>
+                                    <label class="switch-row" for="enableTransparentProxy"><span class="switch-copy"><strong>本机透明代理</strong></span><input type="checkbox" role="switch" id="enableTransparentProxy" /></label>
+                                </fieldset>
+                                <fieldset class="settings-card">
+                                    <legend>订阅与访问</legend>
+                                    <div class="field"><label for="configFileUrl">订阅地址</label><input type="url" inputmode="url" spellcheck="false" id="configFileUrl" name="configFileUrl" placeholder="https://example.com/config.yaml" /></div>
+                                    <div class="field"><label for="mihomoApiKey">控制面板密钥</label><input type="password" autocomplete="new-password" id="mihomoApiKey" name="mihomoApiKey" placeholder="留空保留当前密钥" /></div>
+                                </fieldset>
+                                <fieldset class="settings-card wide">
+                                    <legend>下载来源</legend>
+                                    <div class="field-grid">
+                                        <div class="field"><label for="githubProxy">GitHub 下载代理</label><input type="url" inputmode="url" spellcheck="false" id="githubProxy" name="githubProxy" placeholder="https://gh.example.com/" /></div>
+                                        <div class="field"><label for="githubApiProxy">GitHub API 代理</label><input type="url" inputmode="url" spellcheck="false" id="githubApiProxy" name="githubApiProxy" placeholder="https://gh.example.com/" /></div>
+                                    </div>
+                                </fieldset>
+                            </div>
+                            <div class="settings-actions"><button id="saveSettingsBtn" class="nav-button primary-button"><svg class="icon " aria-hidden="true" focusable="false"><use href="#icon-device-floppy"></use></svg><span>保存并更新</span></button></div>
+                        </div>
+                    </div>
+                    <div id="logsView" class="logs-view" style="display: none">
+                        <div class="view-heading"><div><h1>Mihomo 日志</h1></div><div class="log-actions"><span id="logStatus" role="status">尚未连接</span><button id="updateBtn" class="nav-button" aria-label="更新订阅"><svg class="icon" aria-hidden="true" focusable="false"><use href="#icon-refresh"></use></svg><span id="updateBtnLabel">更新订阅</span></button></div></div>
+
+                        <div id="logOutput" role="log" aria-label="Mihomo 日志，最新在上" aria-live="off" tabindex="0"></div>
+                        <aside id="updateOverlay" class="update-overlay" aria-label="更新状态" hidden>
+                            <button id="updateToggle" aria-expanded="true" aria-controls="updateHistory"><svg class="icon " aria-hidden="true" focusable="false"><use href="#icon-refresh"></use></svg><span class="update-copy"><span id="updateSummary"></span></span><svg class="icon update-chevron" aria-hidden="true" focusable="false"><use href="#icon-chevron-down"></use></svg></button>
+                            <div id="updateHistory" role="log" aria-label="更新阶段记录" tabindex="0"></div>
+                        </aside>
+                    </div>
+                </main>
+                <div class="bottom-area" id="uiContainer"><iframe id="uiFrame" title="MetaCubeXD 管理面板" src=""></iframe></div>
+            </div>
+        </div>
+        <script>
+            // One global toast owner handles lifetime, replacement, accessibility
+            // and safe text rendering for every feature, including authentication.
+            function createNotifications(container) {
+                const entries = new Map();
+                let sequence = 0;
+                function dismiss(id) {
+                    const entry = entries.get(id);
+                    if (!entry) return;
+                    clearTimeout(entry.timer);
+                    entry.card.remove();
+                    entries.delete(id);
+                }
+                function clear() { for (const id of entries.keys()) dismiss(id); }
+                function show({ id = `notice-${++sequence}`, title, message = "", tone = "info", duration = tone === "error" ? 12000 : 7000 }) {
+                    const previous = entries.get(id);
+                    if (previous?.title === title && previous.message === message && previous.tone === tone) return id;
+                    dismiss(id);
+                    if (entries.size === 3) dismiss(entries.keys().next().value);
+                    const card = document.createElement("section");
+                    card.className = "toast";
+                    card.dataset.tone = tone;
+                    card.dataset.notice = id;
+                    card.setAttribute("role", tone === "error" ? "alert" : "status");
+                    const heading = document.createElement("div");
+                    heading.className = "toast-heading";
+                    const text = document.createElement("strong");
+                    text.textContent = title;
+                    const close = document.createElement("button");
+                    close.className = "toast-close";
+                    close.setAttribute("aria-label", "关闭提示");
+                    close.textContent = "×";
+                    close.addEventListener("click", () => dismiss(id));
+                    heading.append(text, close);
+                    card.appendChild(heading);
+                    const entry = { card, title, message, tone, remaining: Math.max(1000, duration), holds: new Set(), timer: null, started: 0 };
+                    const schedule = () => {
+                        if (entry.holds.size || !entries.has(id)) return;
+                        entry.started = Date.now();
+                        entry.timer = setTimeout(() => dismiss(id), entry.remaining);
+                    };
+                    const hold = reason => {
+                        if (!entry.holds.size) {
+                            clearTimeout(entry.timer);
+                            entry.remaining = Math.max(0, entry.remaining - (Date.now() - entry.started));
+                        }
+                        entry.holds.add(reason);
+                    };
+                    const release = reason => { if (entry.holds.delete(reason) && !entry.holds.size) schedule(); };
+                    card.addEventListener("pointerenter", () => hold("pointer"));
+                    card.addEventListener("pointerleave", () => release("pointer"));
+                    card.addEventListener("focusin", () => hold("focus"));
+                    card.addEventListener("focusout", event => { if (!card.contains(event.relatedTarget)) release("focus"); });
+                    if (message) {
+                        const details = document.createElement("details");
+                        const summary = document.createElement("summary");
+                        summary.textContent = "查看详情";
+                        const body = document.createElement("div");
+                        body.className = "toast-detail";
+                        body.textContent = message;
+                        body.tabIndex = 0;
+                        details.append(summary, body);
+                        details.addEventListener("toggle", () => details.open ? hold("details") : release("details"));
+                        card.appendChild(details);
+                    }
+                    entries.set(id, entry);
+                    container.appendChild(card);
+                    schedule();
+                    return id;
+                }
+                return { show, dismiss, clear };
+            }
+            const notifications = createNotifications(document.getElementById("notifications"));
+
+            // Decode complete NDJSON records, including UTF-8 and JSON split across network chunks.
+            async function readLogRecords(reader, receive) {
+                const decoder = new TextDecoder();
+                let pending = "";
+                while (true) {
+                    const { done, value } = await reader.read();
+                    pending += done ? decoder.decode() : decoder.decode(value, { stream: true });
+                    const lines = pending.split("\n");
+                    pending = lines.pop();
+                    if (done && pending) { lines.push(pending); pending = ""; }
+                    if (lines.length) receive(lines.filter(line => line.trim()).map(line => JSON.parse(line)));
+                    if (pending.length > 4 * 1024 * 1024) throw new Error("日志记录超过读取上限");
+                    if (done) return;
+                }
+            }
+
+            function waitForPoll(signal) {
+                return new Promise((resolve, reject) => {
+                    const abort = () => { clearTimeout(timer); reject(new DOMException("Aborted", "AbortError")); };
+                    const timer = setTimeout(() => { signal.removeEventListener("abort", abort); resolve(); }, 1000);
+                    signal.addEventListener("abort", abort, { once: true });
+                    if (signal.aborted) abort();
+                });
+            }
+
+            // 密钥校验逻辑
+            function checkSecret(secret) {
+                return fetch("/check_secret", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ secret }),
+                }).then((r) => r.json());
+            }
+
+            function showAuthOverlay(show) {
+                document.getElementById("authOverlay").style.display = show ? "flex" : "none";
+            }
+
+            function authHeaders() {
+                const secret = localStorage.getItem("mihomo_secret") || "";
+                return secret ? { "X-Mihomo-Secret": secret } : {};
+            }
+
+            async function requireSecretAuth() {
+                let savedSecret = localStorage.getItem("mihomo_secret") || "";
+                if (savedSecret) {
+                    try {
+                        const res = await checkSecret(savedSecret);
+                        if (res.success) {
+                            showAuthOverlay(false);
+                            return true;
+                        }
+                    } catch (_) {
+                        notifications.show({ id: "auth", tone: "error", title: "暂时无法连接服务，请稍后重试。" });
+                    }
+                }
+                showAuthOverlay(true);
+                return false;
+            }
+
+            document.addEventListener("DOMContentLoaded", async () => {
+                // 密钥输入界面逻辑
+                const secretInput = document.getElementById("secretInput");
+                const secretSubmitBtn = document.getElementById("secretSubmitBtn");
+
+                async function handleSecretSubmit() {
+                    if (secretSubmitBtn.disabled) return;
+                    const secret = secretInput.value.trim();
+                    notifications.dismiss("auth");
+                    secretInput.setAttribute("aria-invalid", "false");
+                    secretSubmitBtn.disabled = true;
+                    secretSubmitBtn.setAttribute("aria-busy", "true");
+                    try {
+                        const res = await checkSecret(secret);
+                        if (!res.success) {
+                            secretInput.setAttribute("aria-invalid", "true");
+                            throw new Error(res.msg || "密钥错误，请重新输入");
+                        }
+                        localStorage.setItem("mihomo_secret", secret);
+                        showAuthOverlay(false);
+                        location.reload();
+                    } catch (error) {
+                        notifications.show({ id: "auth", tone: "error", title: error.message });
+                    } finally {
+                        secretSubmitBtn.disabled = false;
+                        secretSubmitBtn.setAttribute("aria-busy", "false");
+                    }
+                }
+                secretSubmitBtn.addEventListener("click", handleSecretSubmit);
+                secretInput.addEventListener("keydown", (e) => {
+                    if (e.key === "Enter") handleSecretSubmit();
+                });
+
+                // 页面加载时先校验密钥
+                if (!await requireSecretAuth()) return;
+
+                const manageBtn = document.getElementById("manageBtn");
+                const settingsBtn = document.getElementById("settingsBtn");
+                const updateBtn = document.getElementById("updateBtn");
+                const updateBtnLabel = document.getElementById("updateBtnLabel");
+                const logsBtn = document.getElementById("logsBtn");
+                const saveSettingsBtn = document.getElementById("saveSettingsBtn");
+                const logoutBtn = document.getElementById("logoutBtn");
+
+                const workspace = document.getElementById("workspace");
+                const uiFrame = document.getElementById("uiFrame");
+                const uiContainer = document.getElementById("uiContainer");
+                const topArea = document.getElementById("topArea");
+                const settingsView = document.getElementById("settingsView");
+                const logsView = document.getElementById("logsView");
+                const logOutput = document.getElementById("logOutput");
+
+                // 设置iframe的src为动态获取的IP地址
+                const currentIp = window.location.hostname;
+                uiFrame.src = `http://${currentIp}:9900/ui#/setup?hostname=${currentIp}&port=9900&secret=${encodeURIComponent(localStorage.getItem("mihomo_secret"))}`;
+
+                const navButtons = [manageBtn, settingsBtn, logsBtn];
+
+                function setActiveButton(activeButton) {
+                    navButtons.forEach((btn) => {
+                        btn.setAttribute("aria-pressed", String(btn === activeButton));
+                        if (btn === activeButton) {
+                            btn.classList.add("active");
+                        } else {
+                            btn.classList.remove("active");
+                        }
+                    });
+                }
+
+                function showView(viewToShow) {
+                    workspace.dataset.view = viewToShow === logsView ? "logs" : viewToShow === settingsView ? "settings" : "manage";
+                    if (viewToShow !== logsView) stopLogs();
+                    if (viewToShow !== settingsView) stopSettings();
+                    settingsView.style.display = "none";
+                    logsView.style.display = "none";
+                    uiContainer.style.display = "none";
+                    topArea.style.display = "none";
+
+                    if (viewToShow === uiContainer) {
+                        uiContainer.style.display = "block";
+                        return;
+                    }
+
+                    topArea.style.display = "block";
+                    viewToShow.style.display = viewToShow === logsView ? "flex" : "block";
+                    if (viewToShow === logsView) void connectLogs();
+                }
+
+                manageBtn.addEventListener("click", () => {
+                    showView(uiContainer);
+                    setActiveButton(manageBtn);
+                });
+
+                settingsBtn.addEventListener("click", () => {
+                    showView(settingsView);
+                    setActiveButton(settingsBtn);
+
+                    // 获取当前配置
+                    fetchSettings();
+                });
+
+                // 获取配置项并填充表单
+                function stopSettings() {
+                    const controller = settingsController;
+                    settingsController = null;
+                    controller?.abort();
+                    loadingSettings = false;
+                    syncUpdateButtons();
+                }
+
+                async function fetchSettings() {
+                    stopSettings();
+                    const controller = new AbortController();
+                    settingsController = controller;
+                    loadingSettings = true;
+                    settingsLoaded = false;
+                    syncUpdateButtons();
+                    notifications.dismiss("settings");
+                    try {
+                        const response = await fetch("/get_settings", { headers: authHeaders(), signal: controller.signal, cache: "no-store" });
+                        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                        const data = await response.json();
+                        if (controller.signal.aborted || signedOut) return;
+                        if (!data.success || !data.data) throw new Error(data.msg || "设置数据不可用");
+                        const booleanSettings = { SKIP_CNIP: "skipCnIp", QUIC: "enableQuic", LOCAL_LOOPBACK_PROXY: "enableTransparentProxy" };
+                        const textSettings = { CONFIG_URL: "configFileUrl", GITHUB_PROXY: "githubProxy", GITHUB_API_PROXY: "githubApiProxy" };
+                        for (const [key, id] of Object.entries(booleanSettings)) {
+                            document.getElementById(id).checked = data.data[key] === "true";
+                        }
+                        for (const [key, id] of Object.entries(textSettings)) {
+                            document.getElementById(id).value = data.data[key] || "";
+                        }
+                        document.getElementById("mihomoApiKey").value = "";
+                        settingsLoaded = true;
+                    } catch (error) {
+                        if (!controller.signal.aborted && !signedOut) {
+                            notifications.show({ id: "settings", tone: "error", title: "读取设置失败", message: error.message + "。重新进入设置页可重试。" });
+                        }
+                    } finally {
+                        if (settingsController === controller) {
+                            settingsController = null;
+                            loadingSettings = false;
+                            syncUpdateButtons();
+                        }
+                    }
+                }
+
+                const logStatus = document.getElementById("logStatus");
+                const updateOverlay = document.getElementById("updateOverlay");
+                const updateToggle = document.getElementById("updateToggle");
+                const updateSummary = document.getElementById("updateSummary");
+                const updateHistory = document.getElementById("updateHistory");
+                let logController = null;
+                let updateController = null;
+                let creatingUpdate = false;
+                let activeUpdate = false;
+                let notifiedTask = "";
+                let savingSettings = false;
+                let loadingSettings = false;
+                let settingsLoaded = false;
+                let settingsController = null;
+                const settingsFields = ["skipCnIp", "enableQuic", "enableTransparentProxy", "configFileUrl", "mihomoApiKey", "githubProxy", "githubApiProxy"].map(id => document.getElementById(id));
+                let signedOut = false;
+                let logCharacters = 0;
+                let displayedTask = "";
+                let lastUpdate = "";
+                const updateResults = {
+                    updated: "更新成功", unchanged: "配置未变化", rejected: "更新被拒绝，当前配置保持不变",
+                    rolled_back: "更新失败，回滚成功", recovery_failed: "更新失败，恢复异常",
+                };
+                const updateStages = {
+                    queued: "更新任务已创建", baseline: "检查当前配置", preparing: "准备新订阅", applying: "加载新配置",
+                    probing: "检测 Google", rolling_back: "恢复旧配置", verifying_rollback: "检查恢复结果", finished: "任务结束",
+                };
+
+                function stopLogs() {
+                    const controller = logController;
+                    logController = null;
+                    controller?.abort();
+                }
+
+                function prependLogs(records) {
+                    const oldFirst = logOutput.firstElementChild;
+                    const oldOffset = oldFirst?.offsetTop || 0;
+                    const oldScroll = logOutput.scrollTop;
+                    const fragment = document.createDocumentFragment();
+                    for (const record of records.reverse()) {
+                        const row = document.createElement("div");
+                        row.className = "log-line";
+                        const timestamp = document.createElement("time");
+                        timestamp.dateTime = record.time || "";
+                        const date = new Date(record.time);
+                        timestamp.textContent = Number.isNaN(date.getTime()) ? "—" : date.toLocaleTimeString("zh-CN", { hour12: false }) + "." + String(date.getMilliseconds()).padStart(3, "0");
+                        timestamp.title = Number.isNaN(date.getTime()) ? "无时间戳" : date.toLocaleString("zh-CN", { hour12: false });
+                        const level = document.createElement("span");
+                        level.className = "log-level";
+                        level.dataset.level = record.level || "unknown";
+                        const logLevels = { trace: "TRACE", debug: "DEBUG", info: "INFO", warning: "WARN", error: "ERROR", fatal: "FATAL", panic: "PANIC" };
+                        level.textContent = logLevels[record.level] || "—";
+                        const message = document.createElement("span");
+                        message.className = "log-message";
+                        message.textContent = record.message;
+                        row.append(timestamp, level, message);
+                        row.dataset.characters = String(record.message.length);
+                        logCharacters += record.message.length;
+                        fragment.appendChild(row);
+                    }
+                    logOutput.prepend(fragment);
+                    while (logOutput.children.length > 1 && (logOutput.children.length > 1000 || logCharacters > 2 * 1024 * 1024)) {
+                        const oldest = logOutput.lastElementChild;
+                        logCharacters -= Number(oldest.dataset.characters);
+                        oldest.remove();
+                    }
+                    // Preserve the viewport while reading older records. New logs
+                    // only follow automatically when the reader is already at top.
+                    logOutput.scrollTop = oldScroll <= 8 || !oldFirst?.isConnected ? 0 : oldScroll + oldFirst.offsetTop - oldOffset;
+                }
+
+                async function connectLogs() {
+                    if (logController || signedOut) return;
+                    const controller = new AbortController();
+                    logController = controller;
+                    const active = () => logController === controller && !controller.signal.aborted;
+                    notifications.dismiss("logs");
+                    logStatus.textContent = "正在连接…";
+                    logStatus.dataset.state = "connecting";
+                    let reader;
+                    let diagnostic = false;
+                    try {
+                        const response = await fetch("/logs", { headers: authHeaders(), signal: controller.signal, cache: "no-store" });
+                        if (!response.ok) throw new Error(await response.text());
+                        if (!active()) return;
+                        logOutput.replaceChildren();
+                        logCharacters = 0;
+                        logStatus.textContent = "实时连接";
+                        logStatus.dataset.state = "connected";
+                        reader = response.body.getReader();
+                        await readLogRecords(reader, records => {
+                            if (!active()) return;
+                            const logs = [];
+                            for (const record of records) {
+                                if (record.type === "log") logs.push(record);
+                                else if (record.type === "error") {
+                                    diagnostic = true;
+                                    logStatus.textContent = "日志源异常";
+                                    logStatus.dataset.state = "error";
+                                    notifications.show({ id: "logs", tone: "error", title: "日志源异常", message: record.message });
+                                }
+                            }
+                            if (logs.length) prependLogs(logs);
+                        });
+                        if (active() && !diagnostic) {
+                            logStatus.textContent = "连接已结束";
+                            logStatus.dataset.state = "disconnected";
+                            notifications.show({ id: "logs", tone: "warning", title: "日志连接已结束", message: "点击日志按钮重新连接。" });
+                        }
+                    } catch (error) {
+                        if (active()) {
+                            logStatus.textContent = "连接中断";
+                            logStatus.dataset.state = "error";
+                            notifications.show({ id: "logs", tone: "error", title: "日志连接中断", message: error.message + "；点击日志按钮重试。" });
+                        }
+                    } finally {
+                        reader?.releaseLock();
+                        if (logController === controller) logController = null;
+                    }
+                }
+
+                function syncUpdateButtons() {
+                    const busy = creatingUpdate || activeUpdate || !!updateController;
+                    const uncertain = activeUpdate && updateOverlay.dataset.state === "error";
+                    updateBtn.disabled = busy;
+                    updateBtn.setAttribute("aria-busy", String(busy));
+                    updateBtn.setAttribute("aria-label", uncertain ? "更新结果待确认" : busy ? "订阅更新进行中" : "更新订阅");
+                    updateBtnLabel.textContent = uncertain ? "状态待确认" : busy ? "更新中…" : "更新订阅";
+                    saveSettingsBtn.disabled = busy || savingSettings || loadingSettings || !settingsLoaded;
+                    saveSettingsBtn.setAttribute("aria-busy", String(savingSettings));
+                    settingsFields.forEach(field => { field.disabled = busy || savingSettings || loadingSettings || !settingsLoaded; });
+                }
+
+                function expandUpdate(expanded) {
+                    updateHistory.hidden = !expanded;
+                    updateToggle.setAttribute("aria-expanded", String(expanded));
+                }
+                updateToggle.addEventListener("click", () => expandUpdate(updateHistory.hidden));
+
+                function renderUpdate(task, restored = false) {
+                    if (!task.id || signedOut) return;
+                    notifications.dismiss("update-connection");
+                    const completedObservedTask = activeUpdate && displayedTask === task.id && !task.running;
+                    activeUpdate = !!task.running;
+                    updateOverlay.hidden = !activeUpdate;
+                    if (displayedTask !== task.id) {
+                        displayedTask = task.id;
+                        lastUpdate = "";
+                        updateHistory.replaceChildren();
+                        expandUpdate(!restored || task.running);
+                    }
+                    const stage = task.running ? (updateStages[task.stage] || task.stage) : (updateResults[task.result] || task.result || "任务结束");
+                    updateOverlay.dataset.state = task.running ? "running" : task.result || "idle";
+                    updateSummary.textContent = stage;
+                    if (completedObservedTask && notifiedTask !== task.id) {
+                        notifiedTask = task.id;
+                        const tone = ["updated", "unchanged"].includes(task.result) ? "success" : ["rolled_back", "rejected"].includes(task.result) ? "warning" : "error";
+                        notifications.show({ id: "update-result", tone, title: stage, message: task.message || "" });
+                    }
+                    syncUpdateButtons();
+                    const key = JSON.stringify([task.stage, task.message, task.result, task.baseline]);
+                    if (key === lastUpdate) return;
+                    lastUpdate = key;
+                    const row = document.createElement("div");
+                    row.className = "update-entry";
+                    const time = task.updated_at ? new Date(task.updated_at).toLocaleTimeString("zh-CN", { hour12: false }) : "";
+                    const baseline = task.baseline === undefined ? "" : ` · 更新前 Google ${task.baseline ? "可达" : "不可达"}`;
+                    row.textContent = `${time} ${stage}${baseline}\n${task.message || ""}`;
+                    updateHistory.prepend(row);
+                    while (updateHistory.children.length > 40) updateHistory.lastElementChild.remove();
+                }
+
+                function stopUpdates() {
+                    const controller = updateController;
+                    updateController = null;
+                    controller?.abort();
+                    syncUpdateButtons();
+                }
+
+                async function watchUpdate() {
+                    if (updateController || signedOut) return;
+                    const controller = new AbortController();
+                    updateController = controller;
+                    notifications.dismiss("update-connection");
+                    syncUpdateButtons();
+                    try {
+                        while (!controller.signal.aborted) {
+                            const response = await fetch("/update_status", { headers: authHeaders(), cache: "no-store", signal: controller.signal });
+                            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                            const task = await response.json();
+                            if (controller.signal.aborted || signedOut) return;
+                            if (!task.id) throw new Error("未返回更新任务状态");
+                            renderUpdate(task);
+                            if (!task.running) break;
+                            await waitForPoll(controller.signal);
+                        }
+                    } catch (error) {
+                        if (!controller.signal.aborted && !signedOut) {
+                            updateOverlay.dataset.state = "error";
+                            updateSummary.textContent = "状态连接中断，任务结果待确认";
+                            notifications.show({ id: "update-connection", tone: "warning", title: "更新状态连接中断", message: error.message + "。后台任务不受影响，点击日志按钮重新连接。" });
+                            const row = document.createElement("div");
+                            row.className = "update-entry";
+                            row.textContent = error.message + "。刷新页面可重新查看任务。";
+                            updateHistory.prepend(row);
+                        }
+                    } finally {
+                        if (updateController === controller) {
+                            updateController = null;
+                            syncUpdateButtons();
+                        }
+                    }
+                }
+
+                updateBtn.addEventListener("click", async () => {
+                    if (updateController || activeUpdate || creatingUpdate || signedOut) return;
+                    creatingUpdate = true;
+                    syncUpdateButtons();
+                    showView(logsView);
+                    setActiveButton(logsBtn);
+                    updateOverlay.hidden = false;
+                    notifications.dismiss("update-result");
+                    notifications.dismiss("update-connection");
+                    expandUpdate(true);
+                    updateOverlay.dataset.state = "running";
+                    updateSummary.textContent = "正在创建更新任务…";
+                    try {
+                        const response = await fetch("/reload", { method: "POST", headers: authHeaders() });
+                        if (signedOut) return;
+                        if (response.status !== 409) {
+                            if (!response.ok) throw new Error(await response.text());
+                            const task = await response.json();
+                            if (signedOut) return;
+                            renderUpdate({ ...task, running: true, stage: "queued", message: "更新任务已创建，等待阶段状态" });
+                        }
+                        await watchUpdate();
+                    } catch (error) {
+                        if (!signedOut) {
+                            updateOverlay.dataset.state = "error";
+                            updateSummary.textContent = "无法创建更新任务：" + error.message;
+                            updateOverlay.hidden = true;
+                            activeUpdate = false;
+                            notifications.show({ id: "update-result", tone: "error", title: "无法创建更新任务", message: error.message });
+                        }
+                    } finally {
+                        creatingUpdate = false;
+                        syncUpdateButtons();
+                    }
+                });
+
+                logsBtn.addEventListener("click", () => {
+                    showView(logsView);
+                    setActiveButton(logsBtn);
+                    void restoreUpdate();
+                });
+
+                showView(uiContainer);
+                setActiveButton(manageBtn);
+                // Restore task observation without changing the user's selected view.
+                async function restoreUpdate() {
+                    try {
+                        const response = await fetch("/update_status", { headers: authHeaders(), cache: "no-store" });
+                        if (!response.ok) return;
+                        const task = await response.json();
+                        if (signedOut || creatingUpdate || updateController) return;
+                        renderUpdate(task, true);
+                        if (task.running) void watchUpdate();
+                    } catch (_) { /* The next refresh or update reconnects. */ }
+                }
+                void restoreUpdate();
+                window.addEventListener("pagehide", () => { stopLogs(); stopUpdates(); stopSettings(); });
+                window.addEventListener("pageshow", event => {
+                    if (event.persisted && !signedOut) {
+                        if (logsView.style.display === "flex") void connectLogs();
+                        void restoreUpdate();
+                    }
+                });
+
+                saveSettingsBtn.addEventListener("click", async () => {
+                    if (savingSettings || loadingSettings || !settingsLoaded || creatingUpdate || activeUpdate || updateController || signedOut) return;
+                    const newSecret = document.getElementById("mihomoApiKey").value.trim();
+                    const settings = {
+                        SKIP_CNIP: document.getElementById("skipCnIp").checked ? "true" : "false",
+                        QUIC: document.getElementById("enableQuic").checked ? "true" : "false",
+                        LOCAL_LOOPBACK_PROXY: document.getElementById("enableTransparentProxy").checked ? "true" : "false",
+                        CONFIG_URL: document.getElementById("configFileUrl").value,
+                        GITHUB_PROXY: document.getElementById("githubProxy").value,
+                        GITHUB_API_PROXY: document.getElementById("githubApiProxy").value,
+                        secret: localStorage.getItem("mihomo_secret") || "",
+                    };
+                    if (newSecret) settings.MIHOMO_SECRET = newSecret;
+                    savingSettings = true;
+                    syncUpdateButtons();
+                    notifications.dismiss("settings");
+                    let saved = false;
+                    try {
+                        const response = await fetch("/save_settings", {
+                            method: "POST", headers: { "Content-Type": "application/json", ...authHeaders() }, body: JSON.stringify(settings),
+                        });
+                        if (!response.ok) throw new Error(await response.text());
+                        const result = await response.json();
+                        if (signedOut) return;
+                        if (!result.success) throw new Error(result.msg || "未知错误");
+                        if (newSecret) localStorage.setItem("mihomo_secret", newSecret);
+                        notifications.show({ id: "settings", tone: "success", title: "设置已保存" });
+                        saved = true;
+                    } catch (error) {
+                        if (!signedOut) {
+                            notifications.show({ id: "settings", tone: "error", title: "保存设置失败", message: error.message });
+                        }
+                    } finally {
+                        savingSettings = false;
+                        syncUpdateButtons();
+                    }
+                    if (saved && !signedOut) updateBtn.click();
+                });
+
+                if (logoutBtn) {
+                    logoutBtn.addEventListener("click", () => {
+                        signedOut = true;
+                        stopLogs();
+                        stopUpdates();
+                        stopSettings();
+                        updateOverlay.hidden = true;
+                        notifications.clear();
+                        localStorage.removeItem("mihomo_secret");
+                        showAuthOverlay(true);
+                    });
+                }
+            });
+        </script>
+    </body>
+</html>

@@ -3,40 +3,11 @@
 # https://www.kernel.org/doc/Documentation/networking/tproxy.txt
 # https://guide.v2fly.org/app/tproxy.html
 
-# 读取环境变量
-load_env_file() {
-    local env_file="$1"
-    if [ ! -f "$env_file" ]; then
-        return 1
-    fi
+# 工作目录固定为部署目录，直接执行与 systemd 启动采用相同路径。
+cd "$(dirname "$0")/.." || exit 1
+WORK_DIR="$PWD"
 
-    while IFS= read -r line || [ -n "$line" ]; do
-        line="${line#"${line%%[![:space:]]*}"}"
-        line="${line%"${line##*[![:space:]]}"}"
-        [ -z "$line" ] && continue
-        [[ "$line" == \#* ]] && continue
-        local key=""
-        local value=""
-        if [[ "$line" =~ ^export[[:space:]]+([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]]; then
-            key="${BASH_REMATCH[1]}"
-            value="${BASH_REMATCH[2]}"
-        elif [[ "$line" =~ ^([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]]; then
-            key="${BASH_REMATCH[1]}"
-            value="${BASH_REMATCH[2]}"
-        fi
-        if [ -n "$key" ]; then
-            value="${value#"${value%%[![:space:]]*}"}"
-            value="${value%"${value##*[![:space:]]}"}"
-            if [[ ( "$value" == \"*\" && "$value" == *\" ) || ( "$value" == \'*\' && "$value" == *\' ) ]]; then
-                value="${value:1:${#value}-2}"
-            fi
-            printf -v "$key" '%s' "$value"
-            export "$key"
-        fi
-    done < "$env_file"
-
-    return 0
-}
+source ./lib/env.sh
 
 if ! load_env_file ".env"; then
     echo "未找到.env文件，请先创建.env文件"
@@ -47,7 +18,6 @@ SKIP_CNIP=${SKIP_CNIP:-true}
 QUIC=${QUIC:-true}
 LOCAL_LOOPBACK_PROXY=${LOCAL_LOOPBACK_PROXY:-false}
 
-WORK_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 setup_nftables() {
     set -e
@@ -63,7 +33,7 @@ setup_nftables() {
     nft add rule clash PREROUTING ip daddr {0.0.0.0/8, 10.0.0.0/8, 127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12, 192.168.0.0/16, 224.0.0.0/4, 240.0.0.0/4} return
     # Skip CN IP address
     if [ "$SKIP_CNIP" = "true" ]; then
-        CN_IP=$(awk '!/^#/ {ip=ip $1 ", "} END {sub(/, $/, "", ip); print ip}' $WORK_DIR/cn_cidr.txt)
+        CN_IP=$(awk '!/^#/ {ip=ip $1 ", "} END {sub(/, $/, "", ip); print ip}' "$WORK_DIR/cn_cidr.txt")
         nft add rule clash PREROUTING ip daddr {$CN_IP} return
     fi
 
@@ -129,7 +99,7 @@ setup_nftables
 echo "*** Starting Mihomo ***"
 
 if [ $# -eq 0 ]; then
-    exec mihomo -d $WORK_DIR
+    exec /usr/local/bin/mihomo -d "$WORK_DIR"
 else
     exec "$@"
 fi

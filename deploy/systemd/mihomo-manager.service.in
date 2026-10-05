@@ -1,0 +1,18 @@
+[Unit]
+Description=Mihomo Manager
+After=network.target
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=1
+WorkingDirectory=@DEPLOY_DIR@
+ExecStart=/usr/local/bin/mihomo-manager
+ExecStartPre=/usr/bin/sleep 1s
+ExecStop=/bin/kill -SIGTERM $MAINPID
+KillMode=process
+KillSignal=SIGTERM
+TimeoutStopSec=10
+
+[Install]
+WantedBy=multi-user.target

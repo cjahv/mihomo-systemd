@@ -4,8 +4,8 @@
 *.dll
 *.so
 *.dylib
-mihomo-manager
-mihomo-manager-*
+/mihomo-manager
+/mihomo-manager-*
 
 # Go测试文件
 *.test
@@ -73,3 +73,7 @@ ui/
 # 压缩文件
 *.tar.gz
 *.zip
+
+# 配置更新事务、私有恢复点和本地验证产物
+.update-state/
+.tmp/
