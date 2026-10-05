@@ -3,7 +3,6 @@ package manager
 import (
 	"bufio"
 	"bytes"
-	"context"
 	_ "embed"
 	"encoding/json"
 	"fmt"
@@ -12,7 +11,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"os/exec"
 	"runtime"
 	"strconv"
 	"strings"
@@ -124,98 +122,6 @@ func (h *managerHandler) handlePOST(w http.ResponseWriter, r *http.Request) {
 		h.handleSaveSettings(w, r)
 	default:
 		http.NotFound(w, r)
-	}
-}
-
-// 对应Python的_handle_logs()
-func (h *managerHandler) handleLogs(w http.ResponseWriter, r *http.Request) {
-	if !h.isAuthorized(r) {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
-		return
-	}
-
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.WriteHeader(200)
-
-	ctx, cancel := context.WithCancel(r.Context())
-	defer cancel()
-
-	cmd := exec.CommandContext(ctx, "journalctl", "-n", "1000", "-fu", "mihomo")
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		fmt.Fprintf(w, "执行失败: %v", err)
-		return
-	}
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		fmt.Fprintf(w, "执行失败: %v", err)
-		return
-	}
-
-	if err := cmd.Start(); err != nil {
-		fmt.Fprintf(w, "执行失败: %v", err)
-		return
-	}
-
-	h.streamOutput(w, ctx, stdout, stderr)
-
-	if err := cmd.Wait(); err != nil && ctx.Err() == nil {
-		fmt.Fprintf(w, "执行失败: %v\n", err)
-	}
-}
-
-// Go的优势：更好的流式输出控制
-func (h *managerHandler) streamOutput(w http.ResponseWriter, ctx context.Context, readers ...io.Reader) {
-	flusher, _ := w.(http.Flusher)
-	lineCh := make(chan string, 128)
-	var wg sync.WaitGroup
-
-	for _, reader := range readers {
-		if reader == nil {
-			continue
-		}
-		wg.Add(1)
-		go func(r io.Reader) {
-			defer wg.Done()
-			scanner := bufio.NewScanner(r)
-			scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-			for scanner.Scan() {
-				line := scanner.Text() + "\n"
-				select {
-				case lineCh <- line:
-				case <-ctx.Done():
-				}
-			}
-			if err := scanner.Err(); err != nil && ctx.Err() == nil {
-				select {
-				case <-ctx.Done():
-				case lineCh <- fmt.Sprintf("读取输出失败: %v\n", err):
-				}
-			}
-		}(reader)
-	}
-
-	go func() {
-		wg.Wait()
-		close(lineCh)
-	}()
-
-	for {
-		select {
-		case <-ctx.Done():
-			// 客户端断开连接，对应Python的异常处理
-			return
-		case line, ok := <-lineCh:
-			if !ok {
-				return
-			}
-			_, _ = w.Write([]byte(line))
-			if flusher != nil {
-				flusher.Flush()
-			}
-		}
 	}
 }
 
