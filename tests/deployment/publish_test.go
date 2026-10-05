@@ -27,6 +27,12 @@ func TestPublishDeployment(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
+			if _, err := exec.LookPath("sha256sum"); err != nil {
+				// The SSH fixture advertises a Linux target with sha256sum.
+				// macOS has shasum instead; supply the target command in the
+				// fixture while retaining real content and manifest verification.
+				writeDeploymentFixture(t, filepath.Join(bin, "sha256sum"), "#!/bin/bash\nexec shasum -a 256 \"$@\"\n")
+			}
 			if legacyShell {
 				// macOS ships Bash 3.2. Pin the outer script and fixture children
 				// to the system shell even when the developer's PATH uses Bash 5.x.
