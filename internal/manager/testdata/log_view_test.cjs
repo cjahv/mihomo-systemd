@@ -51,7 +51,9 @@ async function harness(initialTask = {}, overrides = {}) {
     return { ok: true, body: { getReader: () => stream } };
   };
   const windowEvents = {};
-  const window = { location: { hostname: 'localhost' }, addEventListener(name, callback) { windowEvents[name] = callback; } };
+  const documentEvents = {};
+  let selection = null;
+  const window = { location: { hostname: 'localhost' }, getSelection: () => selection, addEventListener(name, callback) { windowEvents[name] = callback; } };
   let clockTime = Date.now();
   const timers = new Map();
   class ClockDate extends Date { static now() { return clockTime; } }
@@ -64,15 +66,84 @@ async function harness(initialTask = {}, overrides = {}) {
     clockTime += duration;
     for (const [id, timer] of [...timers]) if (timer.expires <= clockTime) { timers.delete(id); timer.callback(); }
   };
-  const context = vm.createContext({ document: { getElementById: id => elements[id], createElement: tag => new Element(tag), createDocumentFragment: () => new Element('fragment'), createTextNode: text => { const node = new Element('#text'); node.textContent = text; return node; }, addEventListener(name, cb) { if (name === 'DOMContentLoaded') ready = cb; } }, window, location: { reload() {} }, localStorage: { getItem: () => 'example', setItem() {}, removeItem() {} }, fetch, TextDecoder, AbortController, DOMException, console, Date: ClockDate, setTimeout: setTimer, clearTimeout: clearTimer });
+  const context = vm.createContext({ document: { getElementById: id => elements[id], createElement: tag => new Element(tag), createDocumentFragment: () => new Element('fragment'), createTextNode: text => { const node = new Element('#text'); node.textContent = text; return node; }, addEventListener(name, cb) { if (name === 'DOMContentLoaded') ready = cb; else documentEvents[name] = cb; } }, window, location: { reload() {} }, localStorage: { getItem: () => 'example', setItem() {}, removeItem() {} }, fetch, TextDecoder, AbortController, DOMException, console, Date: ClockDate, setTimeout: setTimer, clearTimeout: clearTimer, Node: { TEXT_NODE: 3 }, NodeFilter: { SHOW_TEXT: 4 } });
   vm.runInContext(source, context);
   await ready(); await settle();
-  return { elements, streams, requests, context, advance, windowEvents, notices: vm.runInContext('notifications', context), setTask(value) { task = value; } };
+  return { elements, streams, requests, context, advance, windowEvents, documentEvents, setSelection(value) { selection = value; }, notices: vm.runInContext('notifications', context), setTask(value) { task = value; } };
 }
 const messageOf = row => row.children[2].textContent;
 const notice = (elements, id) => elements.notifications.children.find(card => card.dataset.notice === id);
 const line = message => JSON.stringify({ type: 'log', message, time: '2026-10-05T04:00:00Z' }) + '\n';
 const visible = element => !element.hidden && element.style.display !== 'none' && (!element.parent || visible(element.parent));
+
+// These fixtures model selected text offsets; native Range/layout/clipboard
+// behavior is also verified in a real browser, rather than inferred from this DOM.
+function logSelectionFixture(h) {
+ const rows = [
+  ['00:40:46.868', 'WARN', '中文错误\n  保留缩进 <tag> 😀'],
+  ['00:40:46.867', 'INFO', 'Start initial provider apple'],
+ ];
+ const nodes = rows.flatMap(values => {
+  const row = {};
+  return values.map(data => {
+   const field = { closest: selector => selector === '.log-line' ? row : field };
+   return { nodeType: 3, data, length: data.length, parentElement: field };
+  });
+ });
+ const container = h.elements.logOutput;
+ const outside = {};
+ container.contains = node => node === container || nodes.includes(node);
+ h.context.document.createTreeWalker = root => {
+  const texts = root.nodeType === 3 ? [] : nodes;
+  let index = 0;
+  return { nextNode: () => texts[index++] || null };
+ };
+ const range = (first, start, last, end) => ({
+  startContainer: nodes[first], startOffset: start, endContainer: nodes[last], endOffset: end,
+  commonAncestorContainer: first === last ? nodes[first] : container,
+  intersectsNode: node => nodes.indexOf(node) >= first && nodes.indexOf(node) <= last,
+ });
+ const select = (...ranges) => h.setSelection({ isCollapsed: false, rangeCount: ranges.length, getRangeAt: index => ranges[index] });
+ const copy = (overrides = {}) => {
+  const formats = {};
+  const event = { defaultPrevented: false, clipboardData: { setData: (type, text) => formats[type] = text }, preventDefault() { this.defaultPrevented = true; }, ...overrides };
+  h.documentEvents.copy(event);
+  return { formats, prevented: event.defaultPrevented };
+ };
+ return { nodes, container, outside, range, select, copy };
+}
+
+test('log copy separates fields and records while retaining selected offsets and message whitespace', async () => {
+ const h = await harness();
+ const f = logSelectionFixture(h);
+ f.select(f.range(0, 0, 5, f.nodes[5].length));
+ assert.deepEqual(f.copy(), { formats: { 'text/plain': '00:40:46.868 WARN 中文错误\n  保留缩进 <tag> 😀\n00:40:46.867 INFO Start initial provider apple' }, prevented: true });
+ f.select(f.range(1, 2, 4, 2));
+ assert.equal(f.copy().formats['text/plain'], 'RN 中文错误\n  保留缩进 <tag> 😀\n00:40:46.867 IN');
+ f.select(f.range(2, 5, 2, 11));
+ assert.equal(f.copy().formats['text/plain'], '  保留缩进');
+ f.select(f.range(2, f.nodes[2].length, 3, f.nodes[3].length));
+ assert.equal(f.copy().formats['text/plain'], '00:40:46.867');
+ f.select(f.range(0, 0, 0, 2), f.range(5, 0, 5, 5));
+ assert.equal(f.copy().formats['text/plain'], '00\nStart');
+});
+
+test('log copy leaves unrelated, collapsed, empty and unavailable clipboard selections to the browser', async () => {
+ const h = await harness();
+ const f = logSelectionFixture(h);
+ assert.equal(f.copy().prevented, false);
+ h.setSelection({ isCollapsed: true, rangeCount: 0 });
+ assert.equal(f.copy().prevented, false);
+ f.select(f.range(0, 0, 0, 0));
+ assert.equal(f.copy().prevented, false);
+ f.select({ ...f.range(0, 0, 2, 3), startContainer: f.outside });
+ assert.equal(f.copy().prevented, false);
+ f.select(f.range(0, 0, 2, 3), { ...f.range(3, 0, 5, 3), endContainer: f.outside });
+ assert.equal(f.copy().prevented, false);
+ f.select(f.range(0, 0, 2, 3));
+ assert.equal(f.copy({ clipboardData: null }).prevented, false);
+ assert.deepEqual(f.copy({ defaultPrevented: true }).formats, {});
+});
 
 test('Mihomo event ordering, chunk boundaries, independent overlay, connection lifecycle', async () => {
  const h = await harness(); const e = h.elements;

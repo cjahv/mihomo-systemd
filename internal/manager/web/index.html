@@ -402,6 +402,42 @@ SOFTWARE.
                 }
             }
 
+            // Copy selected characters, not Grid's rendered cell boundaries.
+            // Range offsets retain partial fields and the message's own newlines.
+            function formatLogSelection(container, selection) {
+                if (!selection || selection.isCollapsed || !selection.rangeCount) return null;
+                const ranges = [];
+                for (let index = 0; index < selection.rangeCount; index++) {
+                    const range = selection.getRangeAt(index);
+                    if (!container.contains(range.startContainer) || !container.contains(range.endContainer)) return null;
+                    ranges.push(range);
+                }
+                const selectedRanges = [];
+                for (const range of ranges) {
+                    const root = range.commonAncestorContainer;
+                    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+                    const parts = [];
+                    let previousRow = null;
+                    let previousField = null;
+                    for (let node = root.nodeType === Node.TEXT_NODE ? root : walker.nextNode(); node; node = walker.nextNode()) {
+                        if (!range.intersectsNode(node)) continue;
+                        const start = node === range.startContainer ? range.startOffset : 0;
+                        const end = node === range.endContainer ? range.endOffset : node.length;
+                        if (start >= end) continue;
+                        const row = node.parentElement.closest(".log-line");
+                        const field = node.parentElement.closest("time, .log-level, .log-message");
+                        if (!row || !field) continue;
+                        if (previousRow && row !== previousRow) parts.push("\n");
+                        else if (previousField && field !== previousField) parts.push(" ");
+                        parts.push(node.data.slice(start, end));
+                        previousRow = row;
+                        previousField = field;
+                    }
+                    if (parts.length) selectedRanges.push(parts.join(""));
+                }
+                return selectedRanges.length ? selectedRanges.join("\n") : null;
+            }
+
             function waitForPoll(signal) {
                 return new Promise((resolve, reject) => {
                     const abort = () => { clearTimeout(timer); reject(new DOMException("Aborted", "AbortError")); };
@@ -497,6 +533,14 @@ SOFTWARE.
                 const settingsView = document.getElementById("settingsView");
                 const logsView = document.getElementById("logsView");
                 const logOutput = document.getElementById("logOutput");
+
+                document.addEventListener("copy", event => {
+                    if (event.defaultPrevented || !event.clipboardData) return;
+                    const text = formatLogSelection(logOutput, window.getSelection());
+                    if (text === null) return;
+                    event.clipboardData.setData("text/plain", text);
+                    event.preventDefault();
+                });
 
                 // 设置iframe的src为动态获取的IP地址
                 const currentIp = window.location.hostname;
