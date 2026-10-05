@@ -1,8 +1,10 @@
-package main
+package manager
 
 import (
 	"bufio"
+	"bytes"
 	"context"
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -11,54 +13,51 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 )
 
-const SECRET_ENV_PATH = ".env"
+const environmentPath = ".env"
+
+//go:embed web/index.html
+var managerPage []byte
 
 var (
-	PORT          int
-	MIHOMO_SECRET string
+	managerSecret string
+	secretMu      sync.RWMutex
 )
-
-// 启动时读取配置，对应Python的全局变量
-func init() {
-	PORT = getPort()
-	MIHOMO_SECRET = getMihomoSecret()
-}
 
 // 对应Python的get_mihomo_secret()
 func getMihomoSecret() string {
-	if _, err := os.Stat(SECRET_ENV_PATH); os.IsNotExist(err) {
-		return ""
-	}
-
-	file, err := os.Open(SECRET_ENV_PATH)
+	env, err := readEnvironment(environmentPath)
 	if err != nil {
 		return ""
 	}
-	defer file.Close()
+	return env["MIHOMO_SECRET"]
+}
 
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if strings.HasPrefix(line, "MIHOMO_SECRET=") {
-			return strings.SplitN(line, "=", 2)[1]
-		}
-	}
-	return ""
+func currentSecret() string {
+	secretMu.RLock()
+	defer secretMu.RUnlock()
+	return managerSecret
+}
+
+func setSecret(secret string) {
+	secretMu.Lock()
+	defer secretMu.Unlock()
+	managerSecret = secret
 }
 
 // 对应Python的get_port()
 func getPort() int {
-	if _, err := os.Stat(SECRET_ENV_PATH); os.IsNotExist(err) {
+	if _, err := os.Stat(environmentPath); os.IsNotExist(err) {
 		return 8000
 	}
 
-	file, err := os.Open(SECRET_ENV_PATH)
+	file, err := os.Open(environmentPath)
 	if err != nil {
 		return 8000
 	}
@@ -77,13 +76,14 @@ func getPort() int {
 	return 8000
 }
 
-// CustomHandler 对应Python的CustomHandler类
-type CustomHandler struct {
-	reloadMu sync.Mutex
+// managerHandler 对应Python的CustomHandler类
+type managerHandler struct {
+	updateDir      string
+	updaterFactory func(string, io.Writer) *configUpdater
 }
 
-func (h *CustomHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if MIHOMO_SECRET == "" && !isLoopbackRequest(r) {
+func (h *managerHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if currentSecret() == "" && !isLoopbackRequest(r) {
 		http.Error(w, "Forbidden", http.StatusForbidden)
 		return
 	}
@@ -97,13 +97,14 @@ func (h *CustomHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (h *CustomHandler) handleGET(w http.ResponseWriter, r *http.Request) {
+func (h *managerHandler) handleGET(w http.ResponseWriter, r *http.Request) {
 	switch r.URL.Path {
 	case "/":
-		// 对应Python的 self.path = "/ui.html"
-		http.ServeFile(w, r, "ui.html")
+		http.ServeContent(w, r, "index.html", time.Time{}, bytes.NewReader(managerPage))
 	case "/reload":
 		h.handleReload(w, r)
+	case "/update_status":
+		h.handleUpdateStatus(w, r)
 	case "/logs":
 		h.handleLogs(w, r)
 	case "/get_settings":
@@ -113,8 +114,10 @@ func (h *CustomHandler) handleGET(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (h *CustomHandler) handlePOST(w http.ResponseWriter, r *http.Request) {
+func (h *managerHandler) handlePOST(w http.ResponseWriter, r *http.Request) {
 	switch r.URL.Path {
+	case "/reload":
+		h.handleReload(w, r)
 	case "/check_secret":
 		h.handleCheckSecret(w, r)
 	case "/save_settings":
@@ -124,56 +127,8 @@ func (h *CustomHandler) handlePOST(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// 对应Python的_handle_reload()
-func (h *CustomHandler) handleReload(w http.ResponseWriter, r *http.Request) {
-	if !h.isAuthorized(r) {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
-		return
-	}
-
-	if !h.reloadMu.TryLock() {
-		http.Error(w, "更新任务正在执行，请稍后再试", http.StatusConflict)
-		return
-	}
-	defer h.reloadMu.Unlock()
-
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.WriteHeader(200)
-
-	ctx := r.Context()
-
-	runCtx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
-	defer cancel()
-
-	cmd := exec.CommandContext(runCtx, "./auto_task.sh")
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		fmt.Fprintf(w, "执行失败: %v", err)
-		return
-	}
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		fmt.Fprintf(w, "执行失败: %v", err)
-		return
-	}
-
-	if err := cmd.Start(); err != nil {
-		fmt.Fprintf(w, "执行失败: %v", err)
-		return
-	}
-
-	// Go的优势：更好的流式处理和并发控制
-	h.streamOutput(w, ctx, stdout, stderr)
-
-	if err := cmd.Wait(); err != nil && ctx.Err() == nil {
-		fmt.Fprintf(w, "执行失败: %v\n", err)
-	}
-}
-
 // 对应Python的_handle_logs()
-func (h *CustomHandler) handleLogs(w http.ResponseWriter, r *http.Request) {
+func (h *managerHandler) handleLogs(w http.ResponseWriter, r *http.Request) {
 	if !h.isAuthorized(r) {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
@@ -212,7 +167,7 @@ func (h *CustomHandler) handleLogs(w http.ResponseWriter, r *http.Request) {
 }
 
 // Go的优势：更好的流式输出控制
-func (h *CustomHandler) streamOutput(w http.ResponseWriter, ctx context.Context, readers ...io.Reader) {
+func (h *managerHandler) streamOutput(w http.ResponseWriter, ctx context.Context, readers ...io.Reader) {
 	flusher, _ := w.(http.Flusher)
 	lineCh := make(chan string, 128)
 	var wg sync.WaitGroup
@@ -265,7 +220,7 @@ func (h *CustomHandler) streamOutput(w http.ResponseWriter, ctx context.Context,
 }
 
 // 对应Python的_handle_get_settings()
-func (h *CustomHandler) handleGetSettings(w http.ResponseWriter, r *http.Request) {
+func (h *managerHandler) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 	if !h.isAuthorized(r) {
 		h.jsonResponse(w, map[string]interface{}{
 			"success": false,
@@ -276,8 +231,8 @@ func (h *CustomHandler) handleGetSettings(w http.ResponseWriter, r *http.Request
 
 	settings := make(map[string]string)
 
-	if _, err := os.Stat(SECRET_ENV_PATH); !os.IsNotExist(err) {
-		file, err := os.Open(SECRET_ENV_PATH)
+	if _, err := os.Stat(environmentPath); !os.IsNotExist(err) {
+		file, err := os.Open(environmentPath)
 		if err == nil {
 			defer file.Close()
 			scanner := bufio.NewScanner(file)
@@ -304,7 +259,7 @@ func (h *CustomHandler) handleGetSettings(w http.ResponseWriter, r *http.Request
 }
 
 // 对应Python的_handle_check_secret()
-func (h *CustomHandler) handleCheckSecret(w http.ResponseWriter, r *http.Request) {
+func (h *managerHandler) handleCheckSecret(w http.ResponseWriter, r *http.Request) {
 	var data map[string]interface{}
 
 	if err := json.NewDecoder(r.Body).Decode(&data); err != nil {
@@ -316,8 +271,8 @@ func (h *CustomHandler) handleCheckSecret(w http.ResponseWriter, r *http.Request
 	}
 
 	inputSecret, _ := data["secret"].(string)
-	// 对应Python的逻辑：not MIHOMO_SECRET or input_secret == MIHOMO_SECRET
-	passed := (MIHOMO_SECRET == "" || inputSecret == MIHOMO_SECRET)
+	// 对应Python的逻辑：not managerSecret or input_secret == managerSecret
+	passed := (currentSecret() == "" || inputSecret == currentSecret())
 
 	response := map[string]interface{}{
 		"success": passed,
@@ -330,7 +285,7 @@ func (h *CustomHandler) handleCheckSecret(w http.ResponseWriter, r *http.Request
 }
 
 // 对应Python的_handle_save_settings()
-func (h *CustomHandler) handleSaveSettings(w http.ResponseWriter, r *http.Request) {
+func (h *managerHandler) handleSaveSettings(w http.ResponseWriter, r *http.Request) {
 	var data map[string]interface{}
 
 	if err := json.NewDecoder(r.Body).Decode(&data); err != nil {
@@ -342,13 +297,24 @@ func (h *CustomHandler) handleSaveSettings(w http.ResponseWriter, r *http.Reques
 	}
 
 	inputSecret, _ := data["secret"].(string)
-	if MIHOMO_SECRET != "" && inputSecret != MIHOMO_SECRET {
+	if currentSecret() != "" && inputSecret != currentSecret() {
 		h.jsonResponse(w, map[string]interface{}{
 			"success": false,
 			"msg":     "密钥错误",
 		}, 403)
 		return
 	}
+
+	lock, err := acquireUpdateLock(h.updateDirectory())
+	if err != nil {
+		code := http.StatusInternalServerError
+		if err == errUpdateBusy {
+			code = http.StatusConflict
+		}
+		h.jsonResponse(w, map[string]interface{}{"success": false, "msg": err.Error()}, code)
+		return
+	}
+	defer lock.Close()
 
 	allowedKeys := []string{
 		"SKIP_CNIP",
@@ -404,7 +370,7 @@ func (h *CustomHandler) handleSaveSettings(w http.ResponseWriter, r *http.Reques
 
 	// 对应Python的复杂.env文件处理逻辑
 	var envContent string
-	if content, err := os.ReadFile(SECRET_ENV_PATH); err == nil {
+	if content, err := os.ReadFile(environmentPath); err == nil {
 		envContent = string(content)
 	}
 
@@ -437,7 +403,7 @@ func (h *CustomHandler) handleSaveSettings(w http.ResponseWriter, r *http.Reques
 		envContent += "\n"
 	}
 
-	if err := os.WriteFile(SECRET_ENV_PATH, []byte(envContent), 0600); err != nil {
+	if err := atomicWrite(environmentPath, []byte(envContent), 0600); err != nil {
 		h.jsonResponse(w, map[string]interface{}{
 			"success": false,
 			"msg":     "保存失败",
@@ -446,7 +412,7 @@ func (h *CustomHandler) handleSaveSettings(w http.ResponseWriter, r *http.Reques
 	}
 
 	if newSecret, ok := updates["MIHOMO_SECRET"]; ok {
-		MIHOMO_SECRET = newSecret
+		setSecret(newSecret)
 	}
 
 	h.jsonResponse(w, map[string]interface{}{
@@ -455,17 +421,17 @@ func (h *CustomHandler) handleSaveSettings(w http.ResponseWriter, r *http.Reques
 }
 
 // 对应Python的_json_response()
-func (h *CustomHandler) jsonResponse(w http.ResponseWriter, data interface{}, code int) {
+func (h *managerHandler) jsonResponse(w http.ResponseWriter, data interface{}, code int) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(code)
 	json.NewEncoder(w).Encode(data)
 }
 
-func (h *CustomHandler) isAuthorized(r *http.Request) bool {
-	if MIHOMO_SECRET == "" {
+func (h *managerHandler) isAuthorized(r *http.Request) bool {
+	if currentSecret() == "" {
 		return isLoopbackRequest(r)
 	}
-	return requestSecret(r) == MIHOMO_SECRET
+	return requestSecret(r) == currentSecret()
 }
 
 func isLoopbackRequest(r *http.Request) bool {
@@ -487,22 +453,41 @@ func requestSecret(r *http.Request) string {
 	return ""
 }
 
-func main() {
-	// 对应Python的socketserver.ThreadingTCPServer配置
-	handler := &CustomHandler{}
-
-	// Go的优势：更简洁的HTTP服务器设置
+// Run 执行管理器命令；调用方只负责将返回值作为进程退出码。
+func Run(args []string) int {
+	if len(args) == 1 && args[0] == "--version" {
+		fmt.Printf("mihomo-manager %s %s/%s\n", runtime.Version(), runtime.GOOS, runtime.GOARCH)
+		return 0
+	}
+	if len(args) > 0 {
+		if args[0] != "update" {
+			fmt.Fprintln(os.Stderr, "用法: mihomo-manager [--version|update [--retry|--recover-only]]")
+			return 1
+		}
+		return runUpdateCommand(args[1:])
+	}
+	dir, err := os.Getwd()
+	if err != nil {
+		log.Print(err)
+		return 1
+	}
+	serverPort := getPort()
+	setSecret(getMihomoSecret())
+	recoverOnStartup(dir)
 	server := &http.Server{
-		Addr:              fmt.Sprintf(":%d", PORT),
-		Handler:           handler,
+		Addr:              fmt.Sprintf(":%d", serverPort),
+		Handler:           &managerHandler{},
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
-
-	if MIHOMO_SECRET == "" {
+	if currentSecret() == "" {
 		log.Printf("未设置 MIHOMO_SECRET，已限制仅允许本机访问")
 	}
-	fmt.Printf("服务已启动，端口：%d\n", PORT)
-	log.Fatal(server.ListenAndServe())
+	fmt.Printf("服务已启动，端口：%d\n", serverPort)
+	if err := server.ListenAndServe(); err != nil {
+		log.Print(err)
+		return 1
+	}
+	return 0
 }

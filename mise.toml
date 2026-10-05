@@ -1,0 +1,44 @@
+[tools]
+go = "1.26.8"
+
+[env]
+# 保持 mise 为编译器版本的唯一来源。
+GOTOOLCHAIN = "local"
+
+[tasks.build]
+description = "构建本机管理器"
+run = "mkdir -p .tmp && go build -trimpath -ldflags '-w -s' -o .tmp/mihomo-manager ./cmd/mihomo-manager"
+
+[tasks.run]
+description = "构建并启动管理器"
+depends = ["build"]
+run = ".tmp/mihomo-manager"
+
+[tasks.dev]
+description = "启动开发服务"
+run = "go run ./cmd/mihomo-manager"
+
+[tasks.test]
+description = "运行测试与竞态检查"
+run = "go test -race ./..."
+
+[tasks.vet]
+description = "Go 静态检查"
+run = "go vet ./..."
+
+[tasks.build-all]
+description = "构建 Linux/macOS 的 amd64、arm64 管理器"
+run = '''
+set -eu
+mkdir -p .tmp
+for target_os in linux darwin; do
+    for target_arch in amd64 arm64; do
+        CGO_ENABLED=0 GOAMD64=v1 GOARM64=v8.0 GOOS="$target_os" GOARCH="$target_arch" \
+            go build -trimpath -ldflags '-w -s' -o ".tmp/mihomo-manager-$target_os-$target_arch" ./cmd/mihomo-manager
+    done
+done
+'''
+
+[tasks.publish]
+description = "探测远端环境、本地交叉编译并发布"
+run = "bash ./scripts/publish.sh"

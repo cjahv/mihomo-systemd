@@ -684,59 +684,87 @@
                     }
                 }
 
-                updateBtn.addEventListener("click", async () => {
-                    showView(logsView); // Show logs view first
-                    setActiveButton(updateBtn);
-                    logOutput.textContent = "正在连接到服务器获取日志...";
+                let watchingUpdate = false;
+                const updateResults = {
+                    updated: "更新成功", unchanged: "配置未变化", rejected: "更新被拒绝，当前配置保持不变",
+                    rolled_back: "更新失败，回滚成功", recovery_failed: "更新失败，恢复异常",
+                };
+                const updateStages = {
+                    baseline: "检查当前配置", preparing: "准备新订阅", applying: "加载新配置",
+                    probing: "检测 Google", rolling_back: "恢复旧配置", verifying_rollback: "检查恢复结果", finished: "任务结束",
+                };
 
+                async function watchUpdate(id) {
+                    if (watchingUpdate) return;
+                    watchingUpdate = true;
+                    updateBtn.disabled = true;
+                    saveSettingsBtn.disabled = true;
                     try {
-                        const response = await fetch("/reload", {
-                            method: "GET",
-                            headers: authHeaders(),
-                        });
-
-                        if (!response.ok) {
-                            throw new Error(`HTTP error! status: ${response.status}`);
-                        }
-
-                        // 始终使用流式处理方式读取响应
-                        const reader = response.body.getReader();
-                        const decoder = new TextDecoder();
-
-                        // 清空旧内容
-                        logOutput.innerHTML = "";
-
-                        async function readStream() {
-                            try {
-                                while (true) {
-                                    const { done, value } = await reader.read();
-
-                                    if (done) {
-                                        logOutput.innerHTML += "\n日志流结束。";
-                                        break;
-                                    }
-
-                                    // 追加新内容
-                                    const text = decoder.decode(value, { stream: true });
-                                    // 使用innerHTML来支持HTML格式
-                                    const parsedHtml = parseAnsiColor(text);
-                                    logOutput.innerHTML += parsedHtml;
-
-                                    // 自动滚动到底部
-                                    logOutput.scrollTop = logOutput.scrollHeight;
-                                }
-                            } catch (err) {
-                                logOutput.innerHTML += `\n读取日志流时出错: ${err.message}`;
-                                console.error("Error reading stream:", err);
+                        while (true) {
+                            const response = await fetch("/update_status", { headers: authHeaders(), cache: "no-store" });
+                            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                            const task = await response.json();
+                            if (id && task.id !== id) {
+                                logOutput.textContent = "原任务已经结束，正在展示最新更新任务。";
+                                id = task.id;
                             }
+                            const baseline = task.baseline === undefined ? "" : `\n更新前 Google：${task.baseline ? "可达" : "不可达"}`;
+                            logOutput.textContent = `任务：${task.id || "无"}\n阶段：${updateStages[task.stage] || task.stage}${baseline}\n${task.message}`;
+                            if (!task.running) {
+                                logOutput.textContent += `\n结果：${updateResults[task.result] || task.result || "无更新任务"}`;
+                                break;
+                            }
+                            await new Promise(resolve => setTimeout(resolve, 1000));
                         }
-
-                        readStream();
                     } catch (error) {
-                        logOutput.innerHTML += `\n无法连接到 /reload: ${error.message}\n请检查后台服务是否正在运行。`;
-                        console.error("Error fetching /reload:", error);
+                        logOutput.textContent += `\n状态连接中断：${error.message}。后台任务会继续执行，重新进入页面可查看结果。`;
+                    } finally {
+                        watchingUpdate = false;
+                        updateBtn.disabled = false;
+                        saveSettingsBtn.disabled = false;
+                    }
+                }
+
+                updateBtn.addEventListener("click", async () => {
+                    if (watchingUpdate) return;
+                    showView(logsView);
+                    setActiveButton(updateBtn);
+                    updateBtn.disabled = true;
+                    saveSettingsBtn.disabled = true;
+                    logOutput.textContent = "正在创建更新任务...";
+                    try {
+                        const response = await fetch("/reload", { method: "POST", headers: authHeaders() });
+                        if (response.status === 409) {
+                            await watchUpdate();
+                        } else {
+                            if (!response.ok) throw new Error(await response.text());
+                            const task = await response.json();
+                            await watchUpdate(task.id);
+                        }
+                    } catch (error) {
+                        logOutput.textContent += `\n无法创建更新任务：${error.message}`;
+                    } finally {
+                        updateBtn.disabled = false;
+                        saveSettingsBtn.disabled = false;
                     }
                 });
+
+                // 先建立默认视图，再恢复已有任务，避免覆盖恢复后的结果页。
+                showView(uiContainer);
+                setActiveButton(manageBtn);
+
+                // 刷新页面后重新观察任务，不重复触发更新。
+                try {
+                    const response = await fetch("/update_status", { headers: authHeaders(), cache: "no-store" });
+                    if (response.ok) {
+                        const task = await response.json();
+                        if (task.id) {
+                            showView(logsView);
+                            setActiveButton(updateBtn);
+                            void watchUpdate(task.id);
+                        }
+                    }
+                } catch (_) { /* 后端恢复后仍可主动更新或刷新页面。 */ }
 
                 // 日志按钮点击事件
                 logsBtn.addEventListener("click", async () => {
@@ -817,6 +845,7 @@
                             });
                             const result = await res.json();
                             if (result.success) {
+                                if (mihomoSecretValue) localStorage.setItem("mihomo_secret", mihomoSecretValue);
                                 // 保存成功后直接触发更新按钮的点击事件，重用现有代码
                                 updateBtn.click();
                             } else {
@@ -827,10 +856,6 @@
                         }
                     });
                 }
-
-                // Initial view
-                showView(uiContainer);
-                setActiveButton(manageBtn);
 
                 if (logoutBtn) {
                     logoutBtn.addEventListener("click", () => {
