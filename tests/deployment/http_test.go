@@ -68,7 +68,8 @@ printf complete > "$output"
 `)
 			module := filepath.Join(repositoryRoot(t), "deploy", "lib", "http.sh")
 			cmd := exec.Command("bash", "-c", `source "$1"; github_download "$2" 60 1000 https://proxy.invalid 'https://official.invalid/config?token=sensitive-fixture'`, "download", module, output)
-			cmd.Env = append(os.Environ(), "PATH="+dir+":"+os.Getenv("PATH"), "TEST_EVENTS="+events, "TEST_CASE="+tc.name, "DOWNLOAD_DOH_SERVERS=dns.alidns.com:223.5.5.5 cloudflare-dns.com:1.1.1.1")
+			cmd.Dir = dir
+			cmd.Env = append(os.Environ(), "PATH="+dir+":"+os.Getenv("PATH"), "MIHOMO_SOURCE_DIR="+dir, "DOWNLOAD_PROGRESS=off", "TEST_EVENTS="+events, "TEST_CASE="+tc.name, "DOWNLOAD_DOH_SERVERS=dns.alidns.com:223.5.5.5 cloudflare-dns.com:1.1.1.1")
 			if tc.name == "disabled" {
 				cmd.Env = append(cmd.Env, "DOWNLOAD_DOH_SERVERS=")
 			}
@@ -76,8 +77,11 @@ printf complete > "$output"
 			if (err != nil) != tc.failure {
 				t.Fatalf("error=%v logs=%s", err, logs)
 			}
-			if strings.Contains(string(logs), "sensitive-fixture") {
-				t.Fatal("logged private subscription token")
+			if !strings.HasPrefix(string(logs), "[下载] https://proxy.invalid/https://official.invalid/config?token=sensitive-fixture（开始）\n") {
+				t.Fatalf("missing actual source URL: %s", logs)
+			}
+			if tc.name == "proxy-failure" && !strings.Contains(string(logs), "[下载] https://official.invalid/config?token=sensitive-fixture（开始）\n") {
+				t.Fatalf("fallback did not identify the new source URL: %s", logs)
 			}
 			data, _ := os.ReadFile(output)
 			want := "complete"
@@ -115,7 +119,8 @@ curl() {
     return 28
 }
 http_download "$2" 60 1000 https://example.invalid`, "download", module, output)
-	cmd.Env = append(os.Environ(), "PATH="+dir+":"+os.Getenv("PATH"), "TEST_EVENTS="+events, "DOWNLOAD_DOH_SERVERS=dns.alidns.com:223.5.5.5 cloudflare-dns.com:1.1.1.1")
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "PATH="+dir+":"+os.Getenv("PATH"), "MIHOMO_SOURCE_DIR="+dir, "DOWNLOAD_PROGRESS=off", "TEST_EVENTS="+events, "DOWNLOAD_DOH_SERVERS=dns.alidns.com:223.5.5.5 cloudflare-dns.com:1.1.1.1")
 	if err := cmd.Run(); err == nil {
 		t.Fatal("accepted failed transfers")
 	}
@@ -135,7 +140,7 @@ func TestPrepareKeepsActiveConfigAfterDNSFailure(t *testing.T) {
 		copyDeploymentFile(t, dir, name)
 	}
 	deployDir := filepath.Join(dir, "deploy")
-	writeDeploymentFixture(t, filepath.Join(deployDir, ".env"), "CONFIG_URL=https://subscription.invalid/config?token=private-fixture\nSKIP_CNIP=true\nMIHOMO_SECRET=fixture\n")
+	writeDeploymentFixture(t, filepath.Join(deployDir, ".env"), "CONFIG_URL=https://subscription.invalid/private-path-fixture?token=private-fixture\nSKIP_CNIP=true\nMIHOMO_SECRET=fixture\n")
 	writeDeploymentFixture(t, filepath.Join(deployDir, "config.yaml"), "active configuration")
 	writeDeploymentFixture(t, filepath.Join(deployDir, "cn_cidr.txt"), "1.0.1.0/24\n")
 	stage := filepath.Join(dir, "stage")
@@ -149,13 +154,14 @@ printf partial > "$2"
 exit 6
 `)
 	cmd := exec.Command("bash", filepath.Join(deployDir, "scripts", "update.sh"), "--prepare", stage)
-	cmd.Env = append(os.Environ(), "PATH="+dir+":"+os.Getenv("PATH"), "MIHOMO_UPDATE_INTERNAL=1", "DOWNLOAD_DOH_SERVERS=dns.alidns.com:223.5.5.5 cloudflare-dns.com:1.1.1.1")
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "PATH="+dir+":"+os.Getenv("PATH"), "MIHOMO_SOURCE_DIR="+deployDir, "DOWNLOAD_PROGRESS=off", "MIHOMO_UPDATE_INTERNAL=1", "MIHOMO_TEST_KERNEL="+filepath.Join(dir, "mihomo"), "DOWNLOAD_DOH_SERVERS=dns.alidns.com:223.5.5.5 cloudflare-dns.com:1.1.1.1")
 	out, err := cmd.CombinedOutput()
 	if err == nil || !strings.Contains(string(out), "订阅下载失败") {
 		t.Fatalf("expected failed subscription: %v %s", err, out)
 	}
-	if strings.Contains(string(out), "private-fixture") {
-		t.Fatal("leaked subscription token")
+	if !strings.Contains(string(out), "[下载] https://subscription.invalid/private-path-fixture?token=private-fixture（开始）") {
+		t.Fatalf("subscription download lacks full URL context: %s", out)
 	}
 	active, _ := os.ReadFile(filepath.Join(deployDir, "config.yaml"))
 	if string(active) != "active configuration" {
@@ -188,11 +194,12 @@ if [ "$TEST_CASE" = oversized ]; then printf 'oversized' > "$2"; else : > "$2"; 
 `)
 			module := filepath.Join(repositoryRoot(t), "deploy", "lib", "http.sh")
 			cmd := exec.Command("bash", "-c", `source "$1"; http_download "$2" 60 5 https://example.invalid`, "download", module, output)
+			cmd.Dir = dir
 			resolver := ""
 			if scenario == "invalid-resolver" {
 				resolver = "invalid"
 			}
-			cmd.Env = append(os.Environ(), "PATH="+dir+":"+os.Getenv("PATH"), "TEST_CASE="+scenario, "DOWNLOAD_DOH_SERVERS="+resolver)
+			cmd.Env = append(os.Environ(), "PATH="+dir+":"+os.Getenv("PATH"), "MIHOMO_SOURCE_DIR="+dir, "DOWNLOAD_PROGRESS=off", "TEST_CASE="+scenario, "DOWNLOAD_DOH_SERVERS="+resolver)
 			if err := cmd.Run(); err == nil {
 				t.Fatal("accepted invalid download")
 			}
@@ -230,7 +237,8 @@ func TestHTTPDownloadRedirectProtocols(t *testing.T) {
 			output := filepath.Join(dir, "candidate")
 			writeDeploymentFixture(t, output, "active")
 			cmd := exec.Command("bash", "-c", `source "$1"; http_download "$2" 10 1000 "$3"`, "download", filepath.Join(repositoryRoot(t), "deploy", "lib", "http.sh"), output, origin.URL)
-			cmd.Env = append(os.Environ(), "DOWNLOAD_DOH_SERVERS=")
+			cmd.Dir = dir
+			cmd.Env = append(os.Environ(), "MIHOMO_SOURCE_DIR="+dir, "DOWNLOAD_PROGRESS=off", "DOWNLOAD_DOH_SERVERS=")
 			if secure {
 				caPath := filepath.Join(dir, "ca.pem")
 				ca := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: origin.Certificate().Raw})

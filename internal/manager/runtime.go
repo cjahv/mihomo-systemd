@@ -20,21 +20,29 @@ import (
 const googleProbeURL = "https://www.google.com/generate_204"
 
 type linuxRuntime struct {
-	dir    string
-	output io.Writer
-	pid    string
+	dir         string
+	output      io.Writer
+	pid         string
+	packageRoot string
+	envFile     string
+	kernel      string
 }
 
 func (r *linuxRuntime) script(ctx context.Context, args ...string) error {
-	cmd := exec.CommandContext(ctx, "bash", append([]string{filepath.Join(r.dir, "scripts", "update.sh")}, args...)...)
+	cmd := exec.CommandContext(ctx, "bash", append([]string{filepath.Join(r.packageDir(), "scripts", "update.sh")}, args...)...)
 	cmd.Dir = r.dir
-	cmd.Env = append(os.Environ(), "MIHOMO_UPDATE_INTERNAL=1")
-	cmd.Stdout = r.output
-	cmd.Stderr = r.output
-	return cmd.Run()
+	cmd.Env = append(os.Environ(), "MIHOMO_UPDATE_INTERNAL=1", "MIHOMO_SOURCE_DIR="+r.dir, "MIHOMO_ENV_FILE="+r.environmentPath(), "MIHOMO_TEST_KERNEL="+r.kernelPath())
+	operation := "更新脚本"
+	if len(args) > 0 {
+		operation += "（update.sh " + args[0] + "）"
+	}
+	return runDiagnosticCommand(ctx, operation, cmd, r.output)
 }
 func (r *linuxRuntime) Prepare(ctx context.Context, dir string) error {
-	return r.script(ctx, "--prepare", dir)
+	if err := r.script(ctx, "--prepare", dir); err != nil {
+		return err
+	}
+	return r.stageProviders(ctx, dir, true)
 }
 func (r *linuxRuntime) Render(ctx context.Context, dir string, raw []byte) ([]byte, error) {
 	source := filepath.Join(dir, "rollback-source.yaml")
@@ -44,39 +52,73 @@ func (r *linuxRuntime) Render(ctx context.Context, dir string, raw []byte) ([]by
 	if err := r.script(ctx, "--render", dir, source); err != nil {
 		return nil, err
 	}
+	if err := r.stageProviders(ctx, dir, false); err != nil {
+		return nil, err
+	}
 	return readOptional(filepath.Join(dir, "config.yaml"))
 }
 
+func (r *linuxRuntime) packageDir() string {
+	if r.packageRoot != "" {
+		return r.packageRoot
+	}
+	return r.dir
+}
+func (r *linuxRuntime) environmentPath() string {
+	if r.envFile != "" {
+		return r.envFile
+	}
+	return filepath.Join(r.dir, ".env")
+}
+func (r *linuxRuntime) kernelPath() string {
+	if r.kernel != "" {
+		return r.kernel
+	}
+	return "/usr/local/bin/mihomo"
+}
+
 func (r *linuxRuntime) Validate(ctx context.Context, path string) error {
-	// Provider files can change independently of YAML. Until they have their own
-	// snapshot contract, reject them instead of promising a misleading rollback.
-	cmd := exec.CommandContext(ctx, "yq", "-o=json", ".", path)
-	b, err := cmd.Output()
+	cfg, err := parseConfig(ctx, path)
 	if err != nil {
-		return errors.New("无法解析 YAML")
+		return err
 	}
-	var config map[string]interface{}
-	if err = json.Unmarshal(b, &config); err != nil || len(config) == 0 {
-		return errors.New("配置必须是非空 YAML 对象")
+	items, err := providers(cfg)
+	if err != nil {
+		return err
 	}
-	for _, key := range []string{"proxy-providers", "rule-providers"} {
-		if v, ok := config[key]; ok && v != nil {
-			m, ok := v.(map[string]interface{})
-			if !ok || len(m) > 0 {
-				return fmt.Errorf("%s 依赖独立文件，当前配置回滚仅支持内嵌节点和规则", key)
-			}
+	// Validation references only the prepared resource files. It never points at
+	// a live HTTP provider cache, while geodata remains under the configured home.
+	for _, p := range items {
+		name, err := providerPath(r.dir, p.path)
+		if err != nil {
+			return err
 		}
+		prepared := filepath.Join(filepath.Dir(path), name)
+		data, err := readProvider(filepath.Dir(path), name)
+		if err != nil {
+			return fmt.Errorf("%s[%s] 的候选依赖 %s 无法读取: %w", p.kind, p.name, prepared, err)
+		}
+		if len(data) == 0 {
+			return fmt.Errorf("%s[%s] 的候选依赖 %s 为空", p.kind, p.name, prepared)
+		}
+		p.options["type"], p.options["path"] = "file", prepared
 	}
-	cmd = exec.CommandContext(ctx, "mihomo", "-t", "-d", r.dir, "-f", path)
-	if err = cmd.Run(); err != nil {
-		return errors.New("Mihomo 原生配置校验失败，请检查配置引用、节点及规则")
+	validation := path + ".validation.json"
+	b, err := json.Marshal(cfg)
+	if err != nil {
+		return err
 	}
-	return nil
+	if err = atomicWrite(validation, b, 0600); err != nil {
+		return err
+	}
+	defer os.Remove(validation)
+	cmd := exec.CommandContext(ctx, r.kernelPath(), "-t", "-d", r.dir, "-f", validation)
+	return runDiagnosticCommand(ctx, "Mihomo 原生配置校验", cmd, r.output)
 }
 
 func (r *linuxRuntime) systemctl(ctx context.Context, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, "systemctl", args...)
-	b, e := cmd.Output()
+	b, e := diagnosticCommandOutput(ctx, "systemctl "+strings.Join(args, " "), cmd)
 	return strings.TrimSpace(string(b)), e
 }
 func (r *linuxRuntime) mainPID(ctx context.Context) (string, error) {
@@ -213,6 +255,14 @@ func (r *linuxRuntime) controller(ctx context.Context, method, path string, body
 }
 
 func (r *linuxRuntime) Ready(ctx context.Context) error {
+	cfg, err := parseConfig(ctx, filepath.Join(r.dir, "config.yaml"))
+	if err != nil {
+		return err
+	}
+	items, err := providers(cfg)
+	if err != nil {
+		return err
+	}
 	var last error
 	for {
 		pid, err := r.mainPID(ctx)
@@ -232,7 +282,10 @@ func (r *linuxRuntime) Ready(ctx context.Context) error {
 					c, e := (&net.Dialer{Timeout: 200 * time.Millisecond}).DialContext(ctx, "tcp", "127.0.0.1:7890")
 					if e == nil {
 						c.Close()
-						return nil
+						e = r.providersReady(ctx, items)
+						if e == nil {
+							return nil
+						}
 					}
 					err = e
 				}
@@ -395,4 +448,41 @@ func matchesRunningConfig(desiredJSON, activeJSON []byte) bool {
 		}
 	}
 	return true
+}
+
+func (r *linuxRuntime) providersReady(ctx context.Context, items []providerSpec) error {
+	for _, kind := range []string{"rule-providers", "proxy-providers"} {
+		var wanted []string
+		for _, p := range items {
+			if p.kind == kind {
+				wanted = append(wanted, p.name)
+			}
+		}
+		if len(wanted) == 0 {
+			continue
+		}
+		endpoint := "/providers/rules"
+		if kind == "proxy-providers" {
+			endpoint = "/providers/proxies"
+		}
+		b, err := r.controller(ctx, http.MethodGet, endpoint, nil)
+		if err != nil {
+			return err
+		}
+		var result struct {
+			Providers map[string]struct {
+				UpdatedAt time.Time `json:"updatedAt"`
+			} `json:"providers"`
+		}
+		if err = json.Unmarshal(b, &result); err != nil {
+			return err
+		}
+		for _, name := range wanted {
+			p, ok := result.Providers[name]
+			if !ok || p.UpdatedAt.IsZero() {
+				return fmt.Errorf("%s 尚未成功初始化", kind)
+			}
+		}
+	}
+	return nil
 }

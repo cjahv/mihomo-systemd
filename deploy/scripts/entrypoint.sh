@@ -99,7 +99,7 @@ setup_nftables
 echo "*** Starting Mihomo ***"
 
 if [ $# -eq 0 ]; then
-    exec mihomo -d "$WORK_DIR"
+    exec /usr/local/bin/mihomo -d "$WORK_DIR"
 else
     exec "$@"
 fi

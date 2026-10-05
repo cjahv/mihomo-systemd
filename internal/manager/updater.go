@@ -37,16 +37,19 @@ type updateStatus struct {
 
 // One private, atomically replaced document keeps config bytes and their identity together.
 type configSnapshot struct {
-	ID            string            `json:"id"`
-	Config        []byte            `json:"config"`
-	Raw           []byte            `json:"raw"`
-	CIDR          []byte            `json:"cidr,omitempty"`
-	CIDRPresent   bool              `json:"cidr_present"`
-	CIDRTimestamp []byte            `json:"cidr_timestamp,omitempty"`
-	Hash          string            `json:"hash"`
-	EnvHash       string            `json:"env_hash"`
-	Selections    map[string]string `json:"selections,omitempty"`
-	Verified      bool              `json:"verified"`
+	ID            string               `json:"id"`
+	Config        []byte               `json:"config"`
+	Raw           []byte               `json:"raw"`
+	CIDR          []byte               `json:"cidr,omitempty"`
+	CIDRPresent   bool                 `json:"cidr_present"`
+	CIDRTimestamp []byte               `json:"cidr_timestamp,omitempty"`
+	Hash          string               `json:"hash"`
+	EnvHash       string               `json:"env_hash"`
+	Selections    map[string]string    `json:"selections,omitempty"`
+	Verified      bool                 `json:"verified"`
+	Resources     map[string][]byte    `json:"resources,omitempty"`
+	ResourcesHash string               `json:"resources_hash,omitempty"`
+	ResourceTimes map[string]time.Time `json:"resource_times,omitempty"`
 }
 
 type updateTransaction struct {
@@ -65,6 +68,7 @@ type updateRuntime interface {
 	Prepare(context.Context, string) error
 	Render(context.Context, string, []byte) ([]byte, error)
 	Validate(context.Context, string) error
+	Resources(string) (map[string][]byte, error)
 	ActiveMatches(context.Context, string, string) bool
 	Selections(context.Context) map[string]string
 	Restart(context.Context) error
@@ -75,13 +79,16 @@ type updateRuntime interface {
 }
 
 type configUpdater struct {
-	dir       string
-	stateDir  string
-	runtime   updateRuntime
-	window    time.Duration
-	readiness time.Duration
-	status    updateStatus
-	output    io.Writer
+	dir          string
+	stateDir     string
+	runtime      updateRuntime
+	window       time.Duration
+	readiness    time.Duration
+	status       updateStatus
+	output       io.Writer
+	prepared     *configSnapshot
+	forceRestart bool
+	envFile      string
 }
 
 func newConfigUpdater(dir string, output io.Writer) *configUpdater {
@@ -151,12 +158,18 @@ func (u *configUpdater) snapshot(dir string) (configSnapshot, error) {
 	if err != nil {
 		return s, err
 	}
-	env, err := os.ReadFile(filepath.Join(u.dir, ".env"))
+	env, err := os.ReadFile(u.environmentPath())
 	if err != nil {
 		return s, err
 	}
 	s.EnvHash = digest(env)
-	return s, nil
+	s.Resources, err = u.runtime.Resources(filepath.Join(dir, "config.yaml"))
+	if err != nil {
+		return s, err
+	}
+	s.ResourcesHash = resourceHash(s.Resources)
+	s.ResourceTimes, err = providerResourceTimes(dir, s.Resources)
+	return s, err
 }
 
 func (u *configUpdater) knownGood() (configSnapshot, error) {
@@ -164,7 +177,7 @@ func (u *configUpdater) knownGood() (configSnapshot, error) {
 	if err := readJSON(u.path("confirmed.json"), &s); err != nil {
 		return s, err
 	}
-	if !s.Verified || len(s.Config) == 0 || s.Hash != digest(s.Config) {
+	if !s.Verified || len(s.Config) == 0 || s.Hash != digest(s.Config) || s.ResourcesHash != resourceHash(s.Resources) {
 		return s, errors.New("可用恢复点的完整性检查失败")
 	}
 	return s, nil
@@ -231,22 +244,24 @@ func (u *configUpdater) RunLocked(ctx context.Context, retry bool) (retErr error
 		appliedEnvHash = good.EnvHash
 	}
 	if baseline && currentMatches {
-		if err := u.validateBytes(ctx, stage, before.Config); err == nil {
-			before.ID = u.status.ID + "-baseline"
-			before.Verified = true
-			// Reuse the original subscription only when its committed runtime bytes match.
-			if goodErr == nil && good.Hash == before.Hash {
-				before.Raw = good.Raw
+		if err := writeProviderSnapshot(stage, before.Resources, before.ResourceTimes); err == nil {
+			if err := u.validateBytes(ctx, stage, before.Config); err == nil {
+				before.ID = u.status.ID + "-baseline"
+				before.Verified = true
+				// Reuse the original subscription only when its committed runtime bytes match.
+				if goodErr == nil && good.Hash == before.Hash {
+					before.Raw = good.Raw
+				}
+				confirmedBaseline := before
+				// Reachability verifies config bytes, not that current .env options
+				// have already been applied by scripts/entrypoint.sh.
+				confirmedBaseline.EnvHash = appliedEnvHash
+				if err := writeJSON(u.path("confirmed.json"), confirmedBaseline); err != nil {
+					return err
+				}
+				good = confirmedBaseline
+				goodErr = nil
 			}
-			confirmedBaseline := before
-			// Reachability verifies config bytes, not that current .env options
-			// have already been applied by scripts/entrypoint.sh.
-			confirmedBaseline.EnvHash = appliedEnvHash
-			if err := writeJSON(u.path("confirmed.json"), confirmedBaseline); err != nil {
-				return err
-			}
-			good = confirmedBaseline
-			goodErr = nil
 		}
 	}
 	if baseline {
@@ -257,12 +272,23 @@ func (u *configUpdater) RunLocked(ctx context.Context, retry bool) (retErr error
 	if err != nil {
 		return err
 	}
-	if err = u.runtime.Prepare(ctx, stage); err != nil {
-		return fmt.Errorf("准备候选配置失败: %w", err)
-	}
-	candidate, err := u.snapshot(stage)
-	if err != nil {
-		return err
+	var candidate configSnapshot
+	if u.prepared != nil {
+		candidate = *u.prepared
+		if candidate.Hash != digest(candidate.Config) || candidate.ResourcesHash != resourceHash(candidate.Resources) {
+			return errors.New("预检候选快照完整性检查失败")
+		}
+		if err = u.materialize(stage, candidate); err != nil {
+			return err
+		}
+	} else {
+		if err = u.runtime.Prepare(ctx, stage); err != nil {
+			return fmt.Errorf("准备候选配置失败: %w", err)
+		}
+		candidate, err = u.snapshot(stage)
+		if err != nil {
+			return err
+		}
 	}
 	// A manual .env edit must not mix generations halfway through a transaction.
 	if candidate.EnvHash != before.EnvHash {
@@ -274,13 +300,24 @@ func (u *configUpdater) RunLocked(ctx context.Context, retry bool) (retErr error
 	candidate.ID = u.status.ID
 	candidate.Selections = before.Selections
 	u.status.CandidateHash = candidate.Hash
-	if baseline && currentMatches && before.Hash == candidate.Hash && appliedEnvHash == candidate.EnvHash && equalAux(before, candidate) {
+	if !u.forceRestart && baseline && currentMatches && before.Hash == candidate.Hash && appliedEnvHash == candidate.EnvHash && equalAux(before, candidate) {
+		if err = refreshProviderTimes(u.dir, candidate.Resources, candidate.ResourceTimes); err != nil {
+			return err
+		}
+		candidate.ResourceTimes, err = providerResourceTimes(u.dir, candidate.Resources)
+		if err != nil {
+			return err
+		}
+		candidate.Verified = true
+		if err = writeJSON(u.path("confirmed.json"), candidate); err != nil {
+			return err
+		}
 		if err = u.saveHashes(candidate); err != nil {
 			return err
 		}
 		return u.finish("unchanged", "配置未变化，当前配置可以访问 Google")
 	}
-	fingerprint := digest([]byte(candidate.Hash + candidate.EnvHash + digest(candidate.CIDR)))
+	fingerprint := digest([]byte(candidate.Hash + candidate.EnvHash + digest(candidate.CIDR) + candidate.ResourcesHash))
 	var failed failedCandidate
 	if !retry && readJSON(u.path("failed.json"), &failed) == nil && failed.Fingerprint == fingerprint && time.Since(failed.At) < failedCooldown {
 		return errors.New("同一候选配置近期验收失败，自动更新冷却 5 分钟；人工更新可立即重试")
@@ -291,12 +328,29 @@ func (u *configUpdater) RunLocked(ctx context.Context, retry bool) (retErr error
 	}
 	if len(rollback.Config) > 0 {
 		// Keep current administrator overrides (including the API secret) on rollback.
-		rendered, renderErr := u.runtime.Render(ctx, stage, rollback.Raw)
+		restoreDir, err := os.MkdirTemp(u.stateDir, "restore-")
+		if err != nil {
+			return err
+		}
+		defer os.RemoveAll(restoreDir)
+		if err := writeProviderSnapshot(restoreDir, rollback.Resources, rollback.ResourceTimes); err != nil {
+			return err
+		}
+		rendered, renderErr := u.runtime.Render(ctx, restoreDir, rollback.Raw)
 		if renderErr != nil {
 			return fmt.Errorf("准备恢复点失败: %w", renderErr)
 		}
-		if err = u.validateBytes(ctx, stage, rendered); err != nil {
+		if err = u.validateBytes(ctx, restoreDir, rendered); err != nil {
 			return fmt.Errorf("恢复点校验失败: %w", err)
+		}
+		rollback.Resources, err = u.runtime.Resources(filepath.Join(restoreDir, "config.yaml"))
+		if err != nil {
+			return err
+		}
+		rollback.ResourcesHash = resourceHash(rollback.Resources)
+		rollback.ResourceTimes, err = providerResourceTimes(restoreDir, rollback.Resources)
+		if err != nil {
+			return err
 		}
 		rollback.Config = rendered
 		rollback.Hash = digest(rendered)
@@ -314,7 +368,7 @@ func (u *configUpdater) RunLocked(ctx context.Context, retry bool) (retErr error
 	if current.Hash != before.Hash || current.EnvHash != before.EnvHash || !equalAux(current, before) {
 		return errors.New("准备期间活动配置或环境已变化，请重新更新")
 	}
-	// Render used the same staging directory: apply only captured, validated bytes.
+	// Apply only captured bytes; rollback rendering has its own dependency directory.
 	tx := updateTransaction{ID: u.status.ID, Rollback: rollback, Candidate: candidate}
 	if err = writeJSON(u.path("transaction.json"), tx); err != nil {
 		return err
@@ -322,7 +376,12 @@ func (u *configUpdater) RunLocked(ctx context.Context, retry bool) (retErr error
 	if err = u.report("applying", "正在加载候选配置"); err != nil {
 		return err
 	}
-	err = u.apply(candidate)
+	if len(candidate.Resources) > 0 || len(rollback.Resources) > 0 {
+		err = u.runtime.Stop(ctx)
+	}
+	if err == nil {
+		err = u.apply(candidate)
+	}
 	if err == nil {
 		err = u.loadAndProbe(ctx, candidate.Selections)
 	}
@@ -333,7 +392,7 @@ func (u *configUpdater) RunLocked(ctx context.Context, retry bool) (retErr error
 	candidate.Verified = true
 	// confirmed.json is the commit record. Recovery recognizes a crash after commit.
 	if err = writeJSON(u.path("confirmed.json"), candidate); err != nil {
-		return u.rollback(tx, "无法持久化已确认版本")
+		return u.rollback(tx, fmt.Sprintf("无法持久化已确认版本: %v", err))
 	}
 	if err = u.saveHashes(candidate); err != nil {
 		return err
@@ -346,7 +405,7 @@ func (u *configUpdater) RunLocked(ctx context.Context, retry bool) (retErr error
 }
 
 func equalAux(a, b configSnapshot) bool {
-	return a.CIDRPresent == b.CIDRPresent && digest(a.CIDR) == digest(b.CIDR)
+	return a.CIDRPresent == b.CIDRPresent && digest(a.CIDR) == digest(b.CIDR) && a.ResourcesHash == b.ResourcesHash
 }
 
 func (u *configUpdater) loadAndProbe(ctx context.Context, selections map[string]string) error {
@@ -383,8 +442,13 @@ func (u *configUpdater) rollback(tx updateTransaction, reason string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 	_ = u.report("rolling_back", reason+"；正在恢复本地配置")
+	if len(tx.Rollback.Resources) > 0 || len(tx.Candidate.Resources) > 0 {
+		if err := u.runtime.Stop(ctx); err != nil {
+			return fmt.Errorf("%s\n停止核心以恢复 provider 失败: %w", reason, err)
+		}
+	}
 	if err := u.apply(tx.Rollback); err != nil {
-		return fmt.Errorf("恢复配置文件失败: %w", err)
+		return fmt.Errorf("%s\n恢复配置文件失败: %w", reason, err)
 	}
 	var runtimeErr error
 	if len(tx.Rollback.Config) == 0 {
@@ -400,7 +464,7 @@ func (u *configUpdater) rollback(tx updateTransaction, reason string) error {
 		}
 	}
 	if len(tx.Rollback.Config) == 0 {
-		if err := u.finish("recovery_failed", "新配置失败，首次安装没有可回滚配置，已撤销候选配置"); err != nil {
+		if err := u.finish("recovery_failed", "新配置失败，首次安装没有可回滚配置，已撤销候选配置\n失败原因："+reason); err != nil {
 			return err
 		}
 		if err := removeDurable(u.path("transaction.json")); err != nil {
@@ -409,7 +473,7 @@ func (u *configUpdater) rollback(tx updateTransaction, reason string) error {
 		return errors.New(u.status.Message)
 	}
 	if runtimeErr != nil {
-		if err := u.finish("recovery_failed", fmt.Sprintf("旧配置文件已恢复，但运行验收失败: %v", runtimeErr)); err != nil {
+		if err := u.finish("recovery_failed", fmt.Sprintf("旧配置文件已恢复，但运行验收失败: %v\n原更新失败原因：%s", runtimeErr, reason)); err != nil {
 			return err
 		}
 		if err := removeDurable(u.path("transaction.json")); err != nil {
@@ -426,7 +490,7 @@ func (u *configUpdater) rollback(tx updateTransaction, reason string) error {
 	if err := removeDurable(u.path("transaction.json")); err != nil {
 		return err
 	}
-	if err := u.finish("rolled_back", "更新失败，已恢复旧配置，Google 访问已恢复"); err != nil {
+	if err := u.finish("rolled_back", "更新失败，已恢复旧配置，Google 访问已恢复\n失败原因："+reason); err != nil {
 		return err
 	}
 	return errors.New(u.status.Message)
@@ -460,7 +524,7 @@ func (u *configUpdater) RecoverLocked() error {
 	if err != nil {
 		return fmt.Errorf("读取未完成事务失败: %w", err)
 	}
-	if tx.ID == "" || tx.Rollback.Hash != digest(tx.Rollback.Config) || tx.Candidate.Hash != digest(tx.Candidate.Config) {
+	if tx.ID == "" || tx.Rollback.Hash != digest(tx.Rollback.Config) || tx.Candidate.Hash != digest(tx.Candidate.Config) || tx.Rollback.ResourcesHash != resourceHash(tx.Rollback.Resources) || tx.Candidate.ResourcesHash != resourceHash(tx.Candidate.Resources) {
 		return errors.New("未完成事务完整性检查失败")
 	}
 	u.status = updateStatus{ID: tx.ID, Running: true}
@@ -487,6 +551,9 @@ func (u *configUpdater) RecoverLocked() error {
 		defer os.RemoveAll(stage)
 		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cancel()
+		if err := writeProviderSnapshot(stage, tx.Rollback.Resources, tx.Rollback.ResourceTimes); err != nil {
+			return err
+		}
 		rendered, err := u.runtime.Render(ctx, stage, tx.Rollback.Raw)
 		if err != nil {
 			return err
@@ -494,9 +561,18 @@ func (u *configUpdater) RecoverLocked() error {
 		if err = u.validateBytes(ctx, stage, rendered); err != nil {
 			return err
 		}
+		tx.Rollback.Resources, err = u.runtime.Resources(filepath.Join(stage, "config.yaml"))
+		if err != nil {
+			return err
+		}
+		tx.Rollback.ResourcesHash = resourceHash(tx.Rollback.Resources)
+		tx.Rollback.ResourceTimes, err = providerResourceTimes(stage, tx.Rollback.Resources)
+		if err != nil {
+			return err
+		}
 		tx.Rollback.Config = rendered
 		tx.Rollback.Hash = digest(rendered)
-		env, err := os.ReadFile(filepath.Join(u.dir, ".env"))
+		env, err := os.ReadFile(u.environmentPath())
 		if err != nil {
 			return err
 		}
@@ -506,8 +582,11 @@ func (u *configUpdater) RecoverLocked() error {
 }
 
 func (u *configUpdater) apply(s configSnapshot) error {
-	if s.Hash != digest(s.Config) {
+	if s.Hash != digest(s.Config) || s.ResourcesHash != resourceHash(s.Resources) {
 		return errors.New("配置快照 hash 不匹配")
+	}
+	if err := writeProviderSnapshot(u.dir, s.Resources, s.ResourceTimes); err != nil {
+		return err
 	}
 	files := []struct {
 		name    string
@@ -542,6 +621,10 @@ func (u *configUpdater) saveHashes(s configSnapshot) error {
 }
 
 func atomicWrite(path string, b []byte, mode os.FileMode) error {
+	return atomicWriteAt(path, b, mode, time.Time{})
+}
+
+func atomicWriteAt(path string, b []byte, mode os.FileMode, modified time.Time) error {
 	f, err := os.CreateTemp(filepath.Dir(path), ".write-")
 	if err != nil {
 		return err
@@ -554,6 +637,11 @@ func atomicWrite(path string, b []byte, mode os.FileMode) error {
 	}
 	if _, err = f.Write(b); err != nil {
 		return err
+	}
+	if !modified.IsZero() {
+		if err = os.Chtimes(name, modified, modified); err != nil {
+			return err
+		}
 	}
 	if err = f.Sync(); err != nil {
 		return err
@@ -638,4 +726,89 @@ func readEnvironment(path string) (map[string]string, error) {
 		env[k] = v
 	}
 	return env, nil
+}
+
+func (u *configUpdater) environmentPath() string {
+	if u.envFile != "" {
+		return u.envFile
+	}
+	return filepath.Join(u.dir, ".env")
+}
+func (u *configUpdater) materialize(dir string, s configSnapshot) error {
+	if err := writeProviderSnapshot(dir, s.Resources, s.ResourceTimes); err != nil {
+		return err
+	}
+	for name, data := range map[string][]byte{"config.yaml": s.Config, "subscription.yaml": s.Raw, "cn_cidr.txt": s.CIDR} {
+		if len(data) > 0 {
+			if err := atomicWrite(filepath.Join(dir, name), data, 0600); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// Preparation stores both sides before any executable, service or live config is replaced.
+func (u *configUpdater) prepareDeployment(ctx context.Context, dir string) error {
+	if _, err := os.Stat(u.path("transaction.json")); !errors.Is(err, os.ErrNotExist) {
+		return errors.New("存在未完成配置更新，请先执行 update --recover-only 后重新发布")
+	}
+	before, err := u.snapshot(u.dir)
+	if err != nil {
+		return err
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, u.window)
+	before.Verified = len(before.Config) > 0 && u.runtime.ActiveMatches(ctx, filepath.Join(u.dir, "config.yaml"), before.Hash) && u.runtime.Probe(probeCtx) == nil
+	cancel()
+	if before.Verified {
+		before.Verified = u.runtime.ActiveMatches(ctx, filepath.Join(u.dir, "config.yaml"), before.Hash)
+	}
+	before.Selections = u.runtime.Selections(ctx)
+	if err = writeJSON(filepath.Join(dir, "before.json"), before); err != nil {
+		return err
+	}
+	if len(before.Config) > 0 {
+		oldDir := filepath.Join(dir, "baseline")
+		if err = os.Mkdir(oldDir, 0700); err != nil {
+			return err
+		}
+		if err = u.materialize(oldDir, before); err != nil {
+			return err
+		}
+		if err = u.runtime.Validate(ctx, filepath.Join(oldDir, "config.yaml")); err != nil {
+			return fmt.Errorf("新核心无法校验现有恢复配置: %w", err)
+		}
+	}
+	if err = u.runtime.Prepare(ctx, dir); err != nil {
+		return err
+	}
+	candidate, err := u.snapshot(dir)
+	if err != nil {
+		return err
+	}
+	if err = u.runtime.Validate(ctx, filepath.Join(dir, "config.yaml")); err != nil {
+		return err
+	}
+	if err = u.checkDeploymentSource(before); err != nil {
+		return err
+	}
+	return writeJSON(filepath.Join(dir, "candidate.json"), candidate)
+}
+
+func (u *configUpdater) checkDeploymentSource(before configSnapshot) error {
+	current, err := u.snapshot(u.dir)
+	if err != nil {
+		return err
+	}
+	// An existing production .env must also match the staged environment copy.
+	if env, readErr := os.ReadFile(filepath.Join(u.dir, ".env")); readErr == nil {
+		current.EnvHash = digest(env)
+	} else if !errors.Is(readErr, os.ErrNotExist) {
+		return readErr
+	}
+	if before.Hash != current.Hash || before.EnvHash != current.EnvHash || !equalAux(before, current) ||
+		digest(before.Raw) != digest(current.Raw) || digest(before.CIDRTimestamp) != digest(current.CIDRTimestamp) {
+		return errors.New("预检期间活动文件已变化，尚未安装，请重新发布")
+	}
+	return nil
 }

@@ -22,10 +22,20 @@ log_error() {
     echo -e "${RED}[ERROR]${NC} $1"
 }
 
+usage() {
+    printf '用法: mise run publish -- [--build-only | --force]\n'
+    printf '  --build-only  仅探测目标并在本地构建\n'
+    printf '  --force       保留旧恢复包，跳过未完成发布的自动恢复并重新安装\n'
+}
+
+BUILD_ONLY=false
+FORCE_INSTALL=false
 case "${1:-}" in
-    "") BUILD_ONLY=false ;;
+    "") ;;
     --build-only) BUILD_ONLY=true ;;
-    *) log_error "用法: mise run publish -- [--build-only]"; exit 1 ;;
+    --force) FORCE_INSTALL=true ;;
+    --help|-h) usage; exit 0 ;;
+    *) usage >&2; exit 1 ;;
 esac
 [ "$#" -le 1 ] || { log_error "参数过多"; exit 1; }
 
@@ -54,7 +64,7 @@ remote_dir=$(quote_shell "$REMOTE_DIR")
 log_info "探测远端操作系统、CPU 架构、内核和 systemd..."
 probe=$("${SSH[@]}" "$remote" 'sh -s' <<'REMOTE'
 set -eu
-for cmd in bash tar sha256sum systemctl; do
+for cmd in bash tar sha256sum systemctl flock sudo; do
     command -v "$cmd" >/dev/null || { echo "缺少远端命令: $cmd" >&2; exit 1; }
 done
 [ -d /run/systemd/system ] || { echo "远端未运行 systemd" >&2; exit 1; }
@@ -63,7 +73,9 @@ REMOTE
 ) || handle_error "远端环境探测失败"
 IFS='|' read -r target_os target_machine target_kernel <<< "$probe"
 configure_target "$target_os" "$target_machine" "$target_kernel" || handle_error "远端环境不受支持"
-log_info "目标: ${TARGET_GOOS}/${TARGET_GOARCH}，内核 ${target_kernel}，GOARM=${TARGET_GOARM}"
+target_description="目标: ${TARGET_GOOS}/${TARGET_GOARCH}，内核 ${target_kernel}"
+if [ "$TARGET_GOARCH" = arm ]; then target_description="${target_description}，GOARM=$TARGET_GOARM"; fi
+log_info "$target_description"
 
 mkdir -p .tmp
 build_dir=$(mktemp -d "$PWD/.tmp/deploy.XXXXXX")
@@ -84,7 +96,7 @@ fi
 
 # deploy/ 是唯一运行时文件清单；管理页面随二进制发布。
 cp -R deploy/. "$build_dir/"
-LOCAL_FILES=(install.sh scripts lib systemd mihomo-manager)
+LOCAL_FILES=(install.sh release.sh scripts lib systemd mihomo-manager)
 if command -v shasum >/dev/null; then
     (cd "$build_dir" && shasum -a 256 mihomo-manager > mihomo-manager.sha256)
 else
@@ -105,35 +117,39 @@ log_info "上传运行时文件与预编译管理器..."
 remote_stage=$("${SSH[@]}" "$remote" "mkdir -p $remote_dir && mktemp -d $remote_dir/.deploy.XXXXXX") || handle_error "无法创建远端暂存目录"
 [[ "$remote_stage" == "$REMOTE_DIR"/.deploy.* && "$remote_stage" != *$'\n'* ]] || handle_error "远端返回无效暂存目录"
 stage_dir=$(quote_shell "$remote_stage")
-if ! tar -C "$build_dir" -cf - "${LOCAL_FILES[@]}" | "${SSH[@]}" "$remote" "umask 077; tar -xf - -C $stage_dir"; then
+if ! COPYFILE_DISABLE=1 tar --format=ustar -C "$build_dir" -cf - "${LOCAL_FILES[@]}" | "${SSH[@]}" "$remote" "umask 077; tar -xf - -C $stage_dir"; then
     "${SSH[@]}" "$remote" "rm -rf $stage_dir" || true
     handle_error "上传失败，未执行安装"
 fi
 
 log_info "校验传输产物并安装..."
-"${SSH[@]}" "$remote" "bash -s -- $remote_dir $stage_dir" <<'REMOTE'
+if [ "$FORCE_INSTALL" = true ]; then
+    log_info "强制安装：保留旧恢复包，跳过未完成发布的自动恢复"
+fi
+download_terminal=0
+[ ! -t 2 ] || download_terminal=1
+"${SSH[@]}" "$remote" "bash -s -- $remote_dir $stage_dir $download_terminal $FORCE_INSTALL" <<'REMOTE'
 set -euo pipefail
 umask 077
 deploy_dir="$1"
 stage_dir="$2"
+export MIHOMO_DOWNLOAD_TERMINAL="$3"
+force_install="$4"
+case "$force_install" in true|false) ;; *) exit 1 ;; esac
 trap 'rm -rf "$stage_dir"' EXIT
 cd "$stage_dir"
 sha256sum -c mihomo-manager.sha256
 # 先确认目标可执行，失败时保留现有运行时文件。
 ./mihomo-manager --version
-mkdir -p "$deploy_dir/scripts" "$deploy_dir/lib" "$deploy_dir/systemd"
-for file in install.sh scripts/update.sh scripts/entrypoint.sh lib/target.sh lib/env.sh lib/http.sh systemd/mihomo.service.in systemd/mihomo-manager.service.in; do
-    mv "$file" "$deploy_dir/$file"
-done
-if [ -f .env ] && [ ! -e "$deploy_dir/.env" ]; then
-    cp -n .env "$deploy_dir/.env"
+if [ -f "$deploy_dir/.env" ]; then cp "$deploy_dir/.env" .env; fi
+[ -f .env ] || { echo '缺少部署环境配置' >&2; exit 1; }
+chmod +x install.sh release.sh scripts/update.sh scripts/entrypoint.sh
+# release.sh owns cleanup and keeps the recovery package when compensation fails.
+trap - EXIT
+if [ "$force_install" = true ]; then
+    ./release.sh "$deploy_dir" "$stage_dir" --force
+else
+    ./release.sh "$deploy_dir" "$stage_dir"
 fi
-cd "$deploy_dir"
-chmod +x install.sh scripts/update.sh scripts/entrypoint.sh
-./install.sh "$stage_dir/mihomo-manager"
-./scripts/update.sh
-systemctl restart mihomo-manager.service
-systemctl is-active --quiet mihomo-manager.service
-journalctl -n 100 --no-pager -u mihomo-manager.service
 REMOTE
 log_info "远端部署完成"

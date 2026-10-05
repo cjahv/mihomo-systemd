@@ -43,7 +43,7 @@ func TestNativeMihomoAcceptance(t *testing.T) {
 		}
 	}
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
-	runtime := &linuxRuntime{dir: dir, output: io.Discard}
+	runtime := &linuxRuntime{dir: dir, output: io.Discard, kernel: kernel}
 	script, err := os.ReadFile(filepath.Join("..", "..", "deploy", "scripts", "update.sh"))
 	if err != nil {
 		t.Fatal(err)

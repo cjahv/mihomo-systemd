@@ -15,22 +15,24 @@ import (
 )
 
 type fakeRuntime struct {
-	dir           string
-	probeErrors   []error
-	probes        int
-	restarts      int
-	stops         int
-	readyErrors   []error
-	prepareError  error
-	validateError error
-	renderError   error
-	restartErrors []error
-	matches       bool
-	candidate     []byte
-	newCIDR       []byte
-	prepareGate   chan struct{}
-	readyDeadline time.Duration
-	probeDeadline time.Duration
+	dir               string
+	probeErrors       []error
+	probes            int
+	restarts          int
+	stops             int
+	readyErrors       []error
+	prepareError      error
+	validateError     error
+	renderError       error
+	restartErrors     []error
+	matches           bool
+	resourceNames     []string
+	resourceCandidate map[string][]byte
+	candidate         []byte
+	newCIDR           []byte
+	prepareGate       chan struct{}
+	readyDeadline     time.Duration
+	probeDeadline     time.Duration
 }
 
 func (f *fakeRuntime) Prepare(ctx context.Context, dir string) error {
@@ -50,6 +52,9 @@ func (f *fakeRuntime) Prepare(ctx context.Context, dir string) error {
 	if err := atomicWrite(filepath.Join(dir, "subscription.yaml"), f.candidate, 0600); err != nil {
 		return err
 	}
+	if err := writeProviders(dir, f.resourceCandidate); err != nil {
+		return err
+	}
 	return atomicWrite(filepath.Join(dir, "cn_cidr.txt"), f.newCIDR, 0600)
 }
 func (f *fakeRuntime) Render(_ context.Context, _ string, b []byte) ([]byte, error) {
@@ -61,6 +66,19 @@ func (f *fakeRuntime) Validate(_ context.Context, path string) error {
 		return f.validateError
 	}
 	return nil
+}
+func (f *fakeRuntime) Resources(path string) (map[string][]byte, error) {
+	files := make(map[string][]byte)
+	for _, name := range f.resourceNames {
+		b, err := readOptional(filepath.Join(filepath.Dir(path), name))
+		if err != nil {
+			return nil, err
+		}
+		if len(b) > 0 {
+			files[name] = b
+		}
+	}
+	return files, nil
 }
 func (f *fakeRuntime) ActiveMatches(context.Context, string, string) bool { return f.matches }
 func (f *fakeRuntime) Selections(context.Context) map[string]string {
@@ -637,6 +655,34 @@ func TestRecoveryPreservesCompletedRollbackResult(t *testing.T) {
 			assertResult(t, u, "rolled_back", "old")
 			if runtime.restarts != 0 {
 				t.Fatal("verified rollback was applied twice")
+			}
+		})
+	}
+}
+
+func TestRollbackFinalStatusRetainsOriginalAndRecoveryFailureReasons(t *testing.T) {
+	for _, recoveryFailed := range []bool{false, true} {
+		t.Run(map[bool]string{false: "restored", true: "recovery-failed"}[recoveryFailed], func(t *testing.T) {
+			u, fake := setupUpdater(t)
+			fake.restartErrors = []error{errors.New("systemctl restart: candidate failed at ExecStart"), nil}
+			if recoveryFailed {
+				fake.restartErrors[1] = errors.New("systemctl restart: rollback unit has bad WorkingDirectory")
+			}
+			_ = u.RunLocked(context.Background(), true)
+			result := "rolled_back"
+			if recoveryFailed {
+				result = "recovery_failed"
+			}
+			assertResult(t, u, result, "old")
+			status, err := readStatus(u.dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(status.Message, "candidate failed at ExecStart") {
+				t.Fatalf("lost original failure: %s", status.Message)
+			}
+			if recoveryFailed && !strings.Contains(status.Message, "bad WorkingDirectory") {
+				t.Fatalf("lost recovery failure: %s", status.Message)
 			}
 		})
 	}

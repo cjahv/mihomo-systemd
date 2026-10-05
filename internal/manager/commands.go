@@ -17,6 +17,17 @@ func runUpdateCommand(args []string) int {
 	flags := flag.NewFlagSet("update", flag.ContinueOnError)
 	retry := flags.Bool("retry", false, "忽略同一失败候选的自动更新冷却")
 	recoverOnly := flags.Bool("recover-only", false, "仅恢复未完成的更新")
+	prepareDir := flags.String("prepare-only", "", "准备部署候选，不切换活动配置")
+	prepared := flags.String("prepared", "", "应用已经预检的候选快照")
+	restore := flags.String("restore-snapshot", "", "恢复部署前文件快照，由发布流程负责服务恢复")
+	check := flags.String("check-snapshot", "", "安装前检查活动文件仍与恢复快照一致")
+	verify := flags.String("verify-snapshot", "", "恢复策略选择并验收已恢复服务及原有可达性")
+	sourceDir := flags.String("source-dir", "", "生产配置目录")
+	packageRoot := flags.String("runtime-dir", "", "本次发布的脚本目录")
+	envFile := flags.String("env-file", "", "预检环境文件")
+	kernel := flags.String("kernel", "", "预检核心绝对路径")
+	lockFD := flags.Int("lock-fd", -1, "继承发布流程持有的更新锁")
+	forceRestart := flags.Bool("force-restart", false, "发布时强制加载已安装核心")
 	if flags.Parse(args) != nil || flags.NArg() != 0 {
 		return 1
 	}
@@ -25,7 +36,31 @@ func runUpdateCommand(args []string) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	lock, err := acquireUpdateLock(dir)
+	if *sourceDir != "" {
+		dir = *sourceDir
+	}
+	for _, path := range []string{dir, *prepareDir, *prepared, *restore, *check, *verify, *packageRoot, *envFile, *kernel} {
+		if path != "" && !filepath.IsAbs(path) {
+			fmt.Fprintln(os.Stderr, "发布参数必须为绝对路径")
+			return 1
+		}
+	}
+	modes := 0
+	for _, enabled := range []bool{*recoverOnly, *prepareDir != "", *prepared != "", *restore != "", *check != "", *verify != ""} {
+		if enabled {
+			modes++
+		}
+	}
+	if modes > 1 {
+		fmt.Fprintln(os.Stderr, "更新模式不能组合")
+		return 1
+	}
+	var lock *updateLock
+	if *lockFD >= 0 {
+		lock, err = inheritedUpdateLock(dir, *lockFD)
+	} else {
+		lock, err = acquireUpdateLock(dir)
+	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		if errors.Is(err, errUpdateBusy) {
@@ -35,8 +70,71 @@ func runUpdateCommand(args []string) int {
 	}
 	defer lock.Close()
 	u := newConfigUpdater(dir, os.Stdout)
+	u.envFile, u.forceRestart = *envFile, *forceRestart
+	runtime := &linuxRuntime{dir: dir, packageRoot: *packageRoot, envFile: *envFile, kernel: *kernel, output: os.Stdout}
+	u.runtime = runtime
+	if *restore != "" {
+		var before configSnapshot
+		if err = readJSON(*restore, &before); err == nil {
+			err = u.apply(before)
+		}
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 2
+		}
+		return 0
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	defer cancel()
+	if *check != "" || *verify != "" {
+		path := *check
+		if *verify != "" {
+			path = *verify
+		}
+		var before configSnapshot
+		err = readJSON(path, &before)
+		if err == nil && *check != "" {
+			err = u.checkDeploymentSource(before)
+		} else if err == nil {
+			runtime.pid, err = runtime.mainPID(ctx)
+			if err == nil {
+				readyCtx, readyCancel := context.WithTimeout(ctx, u.readiness)
+				err = runtime.Ready(readyCtx)
+				readyCancel()
+			}
+			if err == nil {
+				probeCtx, probeCancel := context.WithTimeout(ctx, u.window)
+				err = runtime.RestoreSelections(probeCtx, before.Selections)
+				if err == nil && before.Verified {
+					err = runtime.Probe(probeCtx)
+				}
+				probeCancel()
+			}
+		}
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 2
+		}
+		return 0
+	}
+	if *prepareDir != "" {
+		if err = u.prepareDeployment(ctx, *prepareDir); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		return 0
+	}
+	if *prepared != "" {
+		u.prepared = &configSnapshot{}
+		if err = readJSON(*prepared, u.prepared); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+	}
 	if err = u.RecoverLocked(); err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		if u.status.Message != err.Error() {
+			fmt.Fprintln(os.Stderr, err)
+		}
 		if *recoverOnly {
 			return 2
 		}
@@ -51,10 +149,10 @@ func runUpdateCommand(args []string) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
-	defer cancel()
 	if err = u.RunLocked(ctx, *retry); err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		if u.status.Message != err.Error() {
+			fmt.Fprintln(os.Stderr, err)
+		}
 		if u.status.Result == "rolled_back" || u.status.Result == "recovery_failed" {
 			return 2
 		}

@@ -24,18 +24,20 @@ STAGING_DIR="$1"
 
 source ./lib/env.sh
 source ./lib/http.sh
+SOURCE_DIR="${MIHOMO_SOURCE_DIR:-$PWD}"
+ENV_FILE="${MIHOMO_ENV_FILE:-$SOURCE_DIR/.env}"
 
-if ! load_env_file ".env"; then
+if ! load_env_file "$ENV_FILE"; then
     echo "未找到.env文件，请先创建.env文件"
     exit 1
 fi
 
 # 配置变量
 CN_CIDR_URL="https://cdn.jsdelivr.net/gh/gaoyifan/china-operator-ip@ip-lists/china.txt"
-CURRENT_DIR="$(pwd)"
+CURRENT_DIR="$SOURCE_DIR"
 CIDR_FILE="${STAGING_DIR}/cn_cidr.txt"
 CONFIG_FILE="${STAGING_DIR}/config.yaml"
-ENTRYPOINT_SCRIPT="${CURRENT_DIR}/scripts/entrypoint.sh"
+ENTRYPOINT_SCRIPT="$PWD/scripts/entrypoint.sh"
 
 # 中国IP段列表下载时间戳文件
 CIDR_TIMESTAMP_FILE="${STAGING_DIR}/.cidr_timestamp"
@@ -97,7 +99,7 @@ handle_error() {
 
 # 检查mihomo命令是否存在
 check_mihomo() {
-    mihomo -v &> /dev/null || handle_error "Mihomo 运行依赖缺失或不可用，请在开发机重新执行 mise run publish"
+    "${MIHOMO_TEST_KERNEL:-/usr/local/bin/mihomo}" -v &> /dev/null || handle_error "Mihomo 运行依赖缺失或不可用，请在开发机重新执行 mise run publish"
     log_info "mihomo已安装"
 }
 
@@ -121,8 +123,8 @@ if [ "$MODE" = "--prepare" ]; then
     download_cidr=true
 
     # 检查是否跳过下载中国IP段列表
-    if [ "${SKIP_CNIP}" != "true" ]; then
-        log_info "SKIP_CNIP!=true，跳过下载中国IP段列表"
+    if [ "${SKIP_CNIP:-true}" != "true" ]; then
+        log_info "中国 IP 绕过未启用，无需下载 CIDR 列表"
         download_cidr=false
     # 如果不跳过，则检查时间间隔
     elif [ -f "$CIDR_TIMESTAMP_FILE" ]; then

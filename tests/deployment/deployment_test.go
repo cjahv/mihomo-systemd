@@ -1,6 +1,10 @@
 package deployment
 
 import (
+	"bytes"
+	"compress/gzip"
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -64,126 +68,11 @@ func copyDeploymentFile(t *testing.T, dir, name string) {
 	writeDeploymentFixture(t, filepath.Join(dir, name), string(data))
 }
 
-// SSH runs only against a temporary local filesystem; all service/installer commands are mocks.
-func TestPublishDeployment(t *testing.T) {
-	for _, scenario := range []string{"build-only", "existing-env", "new-env", "probe-failure", "unsupported", "build-failure", "env-check-failure", "upload-failure", "checksum-failure", "install-failure"} {
-		t.Run(scenario, func(t *testing.T) {
-			dir := t.TempDir()
-			bin := filepath.Join(dir, "bin")
-			if err := os.Mkdir(bin, 0755); err != nil {
-				t.Fatal(err)
-			}
-			remote := filepath.Join(dir, "remote dir's")
-			if err := os.Mkdir(remote, 0755); err != nil {
-				t.Fatal(err)
-			}
-			for _, name := range []string{"scripts/publish.sh", "deploy/lib/target.sh", "deploy/lib/env.sh", "deploy/lib/http.sh", "deploy/systemd/mihomo.service.in", "deploy/systemd/mihomo-manager.service.in"} {
-				copyDeploymentFile(t, dir, name)
-			}
-			writeDeploymentFixture(t, filepath.Join(dir, ".env"), "REMOTE_USER=root\nREMOTE_HOST=example.invalid\nREMOTE_DIR="+remote+"\nMIHOMO_SECRET=local-fixture\n")
-			if scenario != "new-env" {
-				writeDeploymentFixture(t, filepath.Join(remote, ".env"), "remote-fixture\n")
-			}
-			writeDeploymentFixture(t, filepath.Join(dir, "deploy", "install.sh"), "#!/bin/bash\necho install >> \"$TEST_LOG\"\n[ \"$TEST_CASE\" != install-failure ]\n")
-			writeDeploymentFixture(t, filepath.Join(dir, "deploy", "scripts", "update.sh"), "#!/bin/bash\necho update >> \"$TEST_LOG\"\n")
-			writeDeploymentFixture(t, filepath.Join(dir, "deploy", "scripts", "entrypoint.sh"), "runtime fixture")
-			writeDeploymentFixture(t, filepath.Join(bin, "ssh"), `#!/bin/bash
-set -eu
-remote_command="${@: -1}"
-printf 'ssh %s\n' "$remote_command" >> "$TEST_LOG"
-if [ "$remote_command" = 'sh -s' ]; then
-    cat >/dev/null
-    [ "$TEST_CASE" != probe-failure ] || exit 255
-    if [ "$TEST_CASE" = unsupported ]; then echo 'Linux|mips|6.1.0'; else echo 'Linux|x86_64|6.1.0'; fi
-    exit 0
-fi
-if [[ "$remote_command" == test* && "$TEST_CASE" = env-check-failure ]]; then exit 255; fi
-if [[ "$remote_command" == *'tar -xf'* && "$TEST_CASE" = upload-failure ]]; then cat >/dev/null; exit 1; fi
-if [[ "$remote_command" == *'tar -xf'* && "$TEST_CASE" = checksum-failure ]]; then
-    bash -c "$remote_command"
-    for stage in "$TEST_REMOTE"/.deploy.*; do printf corrupted > "$stage/mihomo-manager"; done
-    exit 0
-fi
-exec bash -c "$remote_command"
-`)
-			writeDeploymentFixture(t, filepath.Join(bin, "mise"), "#!/bin/bash\n[ \"$1\" = exec ] && [ \"$2\" = -- ] || exit 1\nshift 2\nexec \"$@\"\n")
-			writeDeploymentFixture(t, filepath.Join(bin, "go"), `#!/bin/bash
-set -eu
-printf 'build %s %s %s %s %s\n' "$GOOS" "$GOARCH" "$CGO_ENABLED" "$GOTOOLCHAIN" "$GOAMD64" >> "$TEST_LOG"
-[ "$TEST_CASE" != build-failure ] || exit 1
-while [ "$1" != -o ]; do shift; done
-cat > "$2" <<'BINARY'
-#!/bin/bash
-echo 'mihomo-manager go1.26.8 linux/amd64'
-BINARY
-chmod +x "$2"
-`)
-			for _, name := range []string{"systemctl", "journalctl"} {
-				writeDeploymentFixture(t, filepath.Join(bin, name), "#!/bin/bash\necho service >> \"$TEST_LOG\"\n")
-			}
-			logPath := filepath.Join(dir, "events")
-			args := []string{"./scripts/publish.sh"}
-			if scenario == "build-only" {
-				args = append(args, "--build-only")
-			}
-			cmd := exec.Command("bash", args...)
-			cmd.Dir = dir
-			cmd.Env = append(os.Environ(), "PATH="+bin+":"+os.Getenv("PATH"), "TEST_LOG="+logPath, "TEST_CASE="+scenario, "TEST_REMOTE="+remote)
-			out, err := cmd.CombinedOutput()
-			failed := strings.HasSuffix(scenario, "failure") || scenario == "unsupported"
-			if (err != nil) != failed {
-				t.Fatalf("err=%v output=%s", err, out)
-			}
-			logData, _ := os.ReadFile(logPath)
-			log := string(logData)
-			if scenario == "probe-failure" || scenario == "unsupported" {
-				if strings.Contains(log, "build") {
-					t.Fatal("built after failed probe")
-				}
-			} else if !strings.Contains(log, "build linux amd64 0 local v1") {
-				t.Fatalf("missing pinned cross-build: %s", log)
-			}
-			if scenario == "build-only" || scenario == "probe-failure" || scenario == "unsupported" || scenario == "build-failure" || scenario == "env-check-failure" {
-				if strings.Contains(log, "mkdir") || strings.Contains(log, "install\n") || strings.Contains(log, "service\n") {
-					t.Fatalf("unexpected remote mutation: %s", log)
-				}
-			}
-			if (scenario == "upload-failure" || scenario == "checksum-failure") && strings.Contains(log, "install\n") {
-				t.Fatal("installed after upload failure")
-			}
-			if scenario == "install-failure" && strings.Contains(log, "service\n") {
-				t.Fatal("restarted after install failure")
-			}
-			if !failed && scenario != "build-only" {
-				if !strings.Contains(log, "install\nupdate\nservice\n") {
-					t.Fatalf("deployment incomplete: %s", log)
-				}
-				for _, name := range []string{"cmd", "internal", "tests", "go.mod", "mise.toml", "ui.html"} {
-					if _, err := os.Stat(filepath.Join(remote, name)); !os.IsNotExist(err) {
-						t.Fatalf("uploaded development file %s", name)
-					}
-				}
-			}
-			env, _ := os.ReadFile(filepath.Join(remote, ".env"))
-			if scenario != "new-env" && string(env) != "remote-fixture\n" {
-				t.Fatal("overwrote remote environment")
-			}
-			if scenario == "new-env" && !strings.Contains(string(env), "local-fixture") {
-				t.Fatal("missing initial environment")
-			}
-			stages, _ := filepath.Glob(filepath.Join(remote, ".deploy.*"))
-			if len(stages) != 0 {
-				t.Fatalf("remote staging not cleaned: %v", stages)
-			}
-		})
-	}
-}
-
 func TestInstallRejectsMissingOrIncompatibleBinary(t *testing.T) {
 	for _, scenario := range []string{"no-argument", "relative-path", "missing", "cannot-run", "wrong-arch"} {
 		t.Run(scenario, func(t *testing.T) {
 			dir := t.TempDir()
-			for _, name := range []string{"deploy/install.sh", "deploy/lib/target.sh", "deploy/lib/env.sh", "deploy/lib/http.sh"} {
+			for _, name := range []string{"deploy/install.sh", "deploy/lib/target.sh", "deploy/lib/env.sh", "deploy/lib/http.sh", "deploy/lib/release.sh"} {
 				copyDeploymentFile(t, dir, name)
 			}
 			writeDeploymentFixture(t, filepath.Join(dir, "uname"), "#!/bin/bash\ncase \"$1\" in -s) echo Linux;; -m) echo x86_64;; -r) echo 6.1.0;; esac\n")
@@ -198,12 +87,12 @@ func TestInstallRejectsMissingOrIncompatibleBinary(t *testing.T) {
 			for _, name := range []string{"sudo", "curl", "git", "go"} {
 				writeDeploymentFixture(t, filepath.Join(dir, name), "#!/bin/bash\necho unexpected >> \"$TEST_LOG\"\nexit 1\n")
 			}
-			args := []string{"./deploy/install.sh", filepath.Join(dir, "mihomo-manager")}
+			args := []string{"./deploy/install.sh", "--prepare", filepath.Join(dir, "mihomo-manager")}
 			if scenario == "no-argument" {
-				args = args[:1]
+				args = args[:2]
 			}
 			if scenario == "relative-path" {
-				args[1] = "./mihomo-manager"
+				args[2] = "./mihomo-manager"
 			}
 			cmd := exec.Command("bash", args...)
 			cmd.Dir = dir
@@ -242,7 +131,7 @@ func TestUpdateDoesNotInstallRuntime(t *testing.T) {
 			}
 			cmd := exec.Command("bash", args...)
 			cmd.Dir = dir
-			cmd.Env = append(os.Environ(), "PATH="+dir+":"+os.Getenv("PATH"), "TEST_LOG="+log, "MIHOMO_UPDATE_INTERNAL=1")
+			cmd.Env = append(os.Environ(), "PATH="+dir+":"+os.Getenv("PATH"), "TEST_LOG="+log, "MIHOMO_UPDATE_INTERNAL=1", "MIHOMO_TEST_KERNEL="+filepath.Join(dir, "mihomo"))
 			out, err := cmd.CombinedOutput()
 			if err == nil || !strings.Contains(string(out), "mise run publish") {
 				t.Fatalf("expected redeployment error: %v %s", err, out)
@@ -256,7 +145,7 @@ func TestUpdateDoesNotInstallRuntime(t *testing.T) {
 
 // Execute the production installer while mapping privileged paths to a fixture.
 func TestRuntimeInstallerOwnsBinaryAndSystemdUnits(t *testing.T) {
-	for _, scenario := range []string{"current", "dns-failure", "offline", "invalid-release", "artifact-failure", "unusable-core", "unusable-core-offline"} {
+	for _, scenario := range []string{"current", "dns-failure", "offline", "invalid-release", "artifact-failure", "unusable-core", "unusable-core-offline", "verified-release", "corrupt-release", "special-path", "same-release", "same-release-no-assets", "force-same-release", "path-shadow", "path-newer-shadow", "unknown-banner", "prerelease-banner", "apply-changed", "repaired-core", "first-install"} {
 		t.Run(scenario, func(t *testing.T) { testRuntimeInstaller(t, scenario) })
 	}
 }
@@ -264,20 +153,62 @@ func TestRuntimeInstallerOwnsBinaryAndSystemdUnits(t *testing.T) {
 func testRuntimeInstaller(t *testing.T, scenario string) {
 	t.Helper()
 	dir := t.TempDir()
-	for _, name := range []string{"deploy/install.sh", "deploy/lib/target.sh", "deploy/lib/env.sh", "deploy/lib/http.sh", "deploy/scripts/update.sh", "deploy/scripts/entrypoint.sh", "deploy/systemd/mihomo.service.in", "deploy/systemd/mihomo-manager.service.in"} {
+	if scenario == "special-path" {
+		dir = filepath.Join(dir, `runtime space "quote" 'single' %n $PATH \backslash`)
+	}
+	for _, name := range []string{"deploy/install.sh", "deploy/lib/target.sh", "deploy/lib/env.sh", "deploy/lib/http.sh", "deploy/lib/release.sh", "deploy/scripts/update.sh", "deploy/scripts/entrypoint.sh", "deploy/systemd/mihomo.service.in", "deploy/systemd/mihomo-manager.service.in"} {
 		copyDeploymentFile(t, dir, name)
 	}
 	deployDir := filepath.Join(dir, "deploy")
-	if err := os.Mkdir(filepath.Join(deployDir, "ui"), 0755); err != nil {
-		t.Fatal(err)
-	}
+	writeDeploymentFixture(t, filepath.Join(deployDir, "ui", "index.html"), "panel")
 	writeDeploymentFixture(t, filepath.Join(deployDir, ".env"), "GITHUB_PROXY=\nGITHUB_API_PROXY=\n")
 	artifact := filepath.Join(dir, "prebuilt-manager")
 	writeDeploymentFixture(t, artifact, "#!/bin/bash\necho 'mihomo-manager go1.26.8 linux/amd64'\n")
+	downloadVersion := "v1.0.1"
+	if scenario == "force-same-release" {
+		downloadVersion = "v1.0.0"
+	}
+	var compressed bytes.Buffer
+	writer := gzip.NewWriter(&compressed)
+	_, _ = writer.Write([]byte("#!/bin/bash\necho 'Mihomo Meta " + downloadVersion + " linux amd64 with go1.26.8\nUse tags: with_gvisor'\n"))
+	_ = writer.Close()
+	coreArchive := filepath.Join(dir, "core.gz")
+	if err := os.WriteFile(coreArchive, compressed.Bytes(), 0600); err != nil {
+		t.Fatal(err)
+	}
+	hash := sha256.Sum256(compressed.Bytes())
+	checksum := hex.EncodeToString(hash[:])
+	if scenario == "corrupt-release" {
+		checksum = strings.Repeat("a", 64)
+	}
 	bin := filepath.Join(dir, "tools")
 	runtimeBin := filepath.Join(dir, "installed-bin")
 	units := filepath.Join(dir, "installed-systemd")
 	events := filepath.Join(dir, "events")
+	curlEvents := filepath.Join(dir, "curl-events")
+	// Rewrite only fixture-owned paths; the real installer still runs in both phases.
+	installerPath := filepath.Join(deployDir, "install.sh")
+	installer, err := os.ReadFile(installerPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeDeploymentFixture(t, installerPath, strings.ReplaceAll(string(installer), "/usr/local/bin", "${TEST_RUNTIME_BIN}"))
+	installedCore := filepath.Join(runtimeBin, "mihomo")
+	currentBanner := "Mihomo Meta v1.0.0 linux amd64 with go1.26.8\nUse tags: with_gvisor"
+	if scenario == "path-shadow" {
+		currentBanner = strings.ReplaceAll(currentBanner, "v1.0.0", "v1.0.1")
+	} else if scenario == "unknown-banner" {
+		currentBanner = "custom build v1.0.1"
+	} else if scenario == "prerelease-banner" {
+		currentBanner = strings.ReplaceAll(currentBanner, "v1.0.0", "v1.0.1-alpha")
+	}
+	currentBody := "#!/bin/bash\nprintf '%s\\n' '" + currentBanner + "'\n"
+	if strings.HasPrefix(scenario, "unusable-core") || scenario == "repaired-core" {
+		currentBody = "#!/bin/bash\nexit 1\n"
+	}
+	if scenario != "first-install" {
+		writeDeploymentFixture(t, installedCore, currentBody)
+	}
 	writeDeploymentFixture(t, filepath.Join(bin, "sudo"), `#!/bin/bash
 set -eu
 args=()
@@ -290,24 +221,29 @@ exec "${args[@]}"
 `)
 	writeDeploymentFixture(t, filepath.Join(bin, "uname"), "#!/bin/bash\ncase \"$1\" in -s) echo Linux;; -m) echo x86_64;; -r) echo 6.1.0;; esac\n")
 	writeDeploymentFixture(t, filepath.Join(bin, "mihomo"), `#!/bin/bash
-[[ "$TEST_CASE" != unusable-core* ]] || exit 1
-echo 'Mihomo v1.0.0 linux/amd64'
+[[ "$TEST_CASE" != unusable-core* && "$TEST_CASE" != first-install ]] || exit 1
+if [ "$TEST_CASE" = path-newer-shadow ]; then echo 'Mihomo Meta v1.0.1 linux amd64'; else echo 'Mihomo v1.0.0 linux/amd64'; fi
 `)
 	writeDeploymentFixture(t, filepath.Join(bin, "curl"), `#!/bin/bash
 set -eu
 doh=false
 url="${@: -1}"
+printf '%s\n' "$url" >> "$TEST_CURL_LOG"
 while [ "$1" != --output ]; do
     [ "$1" != --doh-url ] || doh=true
     shift
 done
 case "$TEST_CASE" in
+    verified-release|corrupt-release|same-release|force-same-release|path-shadow|path-newer-shadow|unknown-banner|prerelease-banner|apply-changed|repaired-core|first-install)
+        if [[ "$url" = *releases/download* ]]; then cp "$TEST_CORE_ARCHIVE" "$2"; else
+        printf '{"tag_name":"%s","assets":[{"name":"mihomo-linux-amd64-v1-%s.gz","digest":"sha256:%s"}]}' "$TEST_RELEASE_TAG" "$TEST_RELEASE_TAG" "$TEST_CORE_SHA" > "$2"; fi
+        exit 0 ;;
     offline|unusable-core-offline) exit 6 ;;
     dns-failure) [ "$doh" = true ] || exit 6 ;;
     invalid-release|unusable-core) printf '{}' > "$2"; exit 0 ;;
     artifact-failure)
         [[ "$url" != *releases/download* ]] || exit 28
-        printf '{"tag_name":"v1.0.1","assets":[{"name":"mihomo-linux-amd64-v1.0.1.deb"},{"name":"mihomo-linux-amd64-v1.0.1.rpm"},{"name":"mihomo-linux-amd64-v1.0.1.gz"}]}' > "$2"
+        printf '{"tag_name":"v1.0.1","assets":[{"name":"mihomo-linux-amd64-v1-v1.0.1.gz","digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]}' > "$2"
         exit 0 ;;
 esac
 printf '{"tag_name":"v1.0.0"}' > "$2"
@@ -316,15 +252,29 @@ printf '{"tag_name":"v1.0.0"}' > "$2"
 	for _, name := range []string{"git", "go", "nft", "dpkg", "rpm"} {
 		writeDeploymentFixture(t, filepath.Join(bin, name), "#!/bin/bash\necho unexpected >> \"$TEST_LOG\"\nexit 1\n")
 	}
-	cmd := exec.Command("bash", filepath.Join(deployDir, "install.sh"), artifact)
+	cmd := exec.Command("bash", filepath.Join(deployDir, "install.sh"), "--prepare", artifact)
 	cmd.Dir = dir // Installer must resolve its own package root.
-	cmd.Env = append(os.Environ(), "PATH="+bin+":"+os.Getenv("PATH"), "TEST_RUNTIME_BIN="+runtimeBin, "TEST_SYSTEMD_DIR="+units, "TEST_LOG="+events, "TEST_CASE="+scenario)
+	releaseTag := "v1.0.1"
+	if scenario == "same-release" || scenario == "force-same-release" || scenario == "apply-changed" {
+		releaseTag = "v1.0.0"
+	}
+	forceCore := "false"
+	if scenario == "force-same-release" {
+		forceCore = "true"
+	}
+	cmd.Env = append(os.Environ(), "MIHOMO_FORCE_CORE_INSTALL="+forceCore, "TEST_RELEASE_TAG="+releaseTag, "TEST_CURL_LOG="+curlEvents, "PATH="+bin+":"+os.Getenv("PATH"), "TEST_RUNTIME_BIN="+runtimeBin, "TEST_SYSTEMD_DIR="+units, "TEST_LOG="+events, "TEST_CASE="+scenario, "TEST_CORE_ARCHIVE="+coreArchive, "TEST_CORE_SHA="+checksum)
 	out, err := cmd.CombinedOutput()
-	if strings.HasPrefix(scenario, "unusable-core") {
+	if scenario != "first-install" {
+		unchanged, readErr := os.ReadFile(installedCore)
+		if readErr != nil || string(unchanged) != currentBody {
+			t.Fatalf("preparation changed the installed core: %v", readErr)
+		}
+	}
+	if strings.HasPrefix(scenario, "unusable-core") || scenario == "corrupt-release" {
 		if err == nil {
 			t.Fatalf("unusable core accepted: %s", out)
 		}
-		if _, err := os.Stat(runtimeBin); !os.IsNotExist(err) {
+		if _, err := os.Stat(filepath.Join(runtimeBin, "mihomo-manager")); !os.IsNotExist(err) {
 			t.Fatal("installed manager after failed core acquisition")
 		}
 		if _, err := os.Stat(events); !os.IsNotExist(err) {
@@ -335,8 +285,57 @@ printf '{"tag_name":"v1.0.0"}' > "$2"
 	if err != nil {
 		t.Fatalf("installer failed: %v\n%s", err, out)
 	}
+	if scenario == "verified-release" && (!strings.Contains(string(out), "SHA256 校验成功") || !strings.Contains(string(out), "amd64-v1-v1.0.1.gz")) {
+		t.Fatalf("did not install verified baseline: %s", out)
+	}
 	if (scenario == "offline" || scenario == "artifact-failure" || scenario == "invalid-release") && !strings.Contains(string(out), "保留") {
 		t.Fatalf("missing truthful core fallback: %s", out)
+	}
+	if _, err := os.Stat(filepath.Join(runtimeBin, "mihomo-manager")); !os.IsNotExist(err) {
+		t.Fatal("preparation installed system binaries")
+	}
+	downloads, err := os.ReadFile(curlEvents)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantDownload := scenario == "verified-release" || scenario == "force-same-release" || scenario == "path-newer-shadow" || scenario == "unknown-banner" || scenario == "prerelease-banner" || scenario == "artifact-failure" || scenario == "repaired-core" || scenario == "first-install"
+	if strings.Contains(string(downloads), "releases/download") != wantDownload {
+		t.Fatalf("unexpected core download decision: %s\n%s", downloads, out)
+	}
+	if scenario == "same-release" || scenario == "same-release-no-assets" || scenario == "path-shadow" || scenario == "apply-changed" {
+		if !strings.Contains(string(out), "跳过下载") {
+			t.Fatalf("missing version reuse message: %s", out)
+		}
+	}
+	if scenario == "apply-changed" {
+		writeDeploymentFixture(t, installedCore, "#!/bin/bash\necho changed-after-prepare\n")
+	}
+	beforeApply, err := os.Stat(installedCore)
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	preparedCore, err := os.ReadFile(filepath.Join(deployDir, ".release", "mihomo"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeContent, _ := os.ReadFile(installedCore)
+	wantSkipInstall := forceCore == "false" && bytes.Equal(beforeContent, preparedCore)
+	apply := exec.Command("bash", filepath.Join(deployDir, "install.sh"), "--apply", artifact)
+	apply.Dir, apply.Env = cmd.Dir, cmd.Env
+	applyOut, err := apply.CombinedOutput()
+	if err != nil {
+		t.Fatalf("apply failed: %v %s", err, applyOut)
+	}
+	afterApply, err := os.Stat(installedCore)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if (beforeApply != nil && os.SameFile(beforeApply, afterApply)) != wantSkipInstall || strings.Contains(string(applyOut), "跳过重复安装") != wantSkipInstall {
+		t.Fatalf("incorrect replacement decision (skip=%v): %s", wantSkipInstall, applyOut)
+	}
+	afterContent, _ := os.ReadFile(installedCore)
+	if !bytes.Equal(afterContent, preparedCore) {
+		t.Fatal("installed core differs from the preflight candidate")
 	}
 	wantBinary, _ := os.ReadFile(artifact)
 	installed, err := os.ReadFile(filepath.Join(runtimeBin, "mihomo-manager"))
@@ -348,11 +347,27 @@ printf '{"tag_name":"v1.0.0"}' > "$2"
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !strings.Contains(string(data), `WorkingDirectory="`+deployDir+`"`) || strings.Contains(string(data), "@DEPLOY_DIR@") {
+		workingDir := strings.ReplaceAll(deployDir, "%", "%%")
+		if !strings.Contains(string(data), "\nWorkingDirectory="+workingDir+"\n") || strings.Contains(string(data), "@DEPLOY_DIR@") {
 			t.Fatalf("incorrect service working directory: %s", data)
 		}
-		if unit == "mihomo" && !strings.Contains(string(data), `ExecStart="`+deployDir+`/scripts/entrypoint.sh"`) {
+		execDir := strings.NewReplacer(`\`, `\\`, `"`, `\"`, "%", "%%", "$", "$$").Replace(deployDir)
+		if unit == "mihomo" && !strings.Contains(string(data), `ExecStart=/bin/bash "`+execDir+`/scripts/entrypoint.sh"`) {
 			t.Fatalf("incorrect service entrypoint: %s", data)
+		}
+		// On Linux, also use systemd's real parser. The fixture owns executables
+		// under its temporary directory; verification never starts either service.
+		if runtime.GOOS == "linux" {
+			if analyzer, err := exec.LookPath("systemd-analyze"); err == nil {
+				verifyDir := filepath.Join(dir, "verify-systemd")
+				execArtifact := strings.NewReplacer(`\`, `\\`, `"`, `\"`, "%", "%%", "$", "$$").Replace(artifact)
+				candidate := strings.ReplaceAll(string(data), "ExecStart=/usr/local/bin/mihomo-manager", `ExecStart=/bin/bash "`+execArtifact+`"`)
+				path := filepath.Join(verifyDir, unit+".service")
+				writeDeploymentFixture(t, path, candidate)
+				if out, err := exec.Command(analyzer, "verify", "--man=no", path).CombinedOutput(); err != nil {
+					t.Fatalf("systemd rejected rendered unit: %v %s", err, out)
+				}
+			}
 		}
 	}
 	log, _ := os.ReadFile(events)

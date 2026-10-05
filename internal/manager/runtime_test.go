@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-func TestNativeValidationRejectsProvidersAndMalformedConfig(t *testing.T) {
+func TestNativeValidationRejectsMissingProviderFilesAndMalformedConfig(t *testing.T) {
 	dir := t.TempDir()
 	// These commands model process boundaries; real kernel acceptance is separate.
 	yq := `#!/bin/sh
@@ -27,7 +27,7 @@ exit 0
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	marker := filepath.Join(dir, "native-called")
 	t.Setenv("VALIDATE_MARKER", marker)
-	runtime := &linuxRuntime{dir: dir, output: io.Discard}
+	runtime := &linuxRuntime{dir: dir, output: io.Discard, kernel: filepath.Join(dir, "mihomo")}
 	path := filepath.Join(dir, "config.yaml")
 	for _, b := range []string{`{"proxy-providers":{"airport":{"url":"https://example.invalid/sub"}}}`, `{"rule-providers":{"rules":{"path":"rules.yaml"}}}`, `null`, `[]`, `bad yaml`} {
 		if e := os.WriteFile(path, []byte(b), 0600); e != nil {
@@ -80,5 +80,28 @@ func TestRunningConfigMustMatchBeforeBaselinePromotion(t *testing.T) {
 		if got := matchesRunningConfig([]byte(c.desired), []byte(c.active)); got != c.matches {
 			t.Fatalf("runtime identity got=%v want=%v", got, c.matches)
 		}
+	}
+}
+
+func TestNativeAndYAMLValidationPreserveCommandDiagnostics(t *testing.T) {
+	r := providerFixture(t)
+	path := filepath.Join(r.dir, "config.yaml")
+	if err := os.WriteFile(path, []byte(`{"rules":["MATCH,DIRECT"]}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(r.kernelPath(), []byte("#!/bin/bash\necho 'Parse config error: rule target MissingGroup not found'\necho 'invalid rule at line 12' >&2\nexit 1\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	err := r.Validate(context.Background(), path)
+	if err == nil || !strings.Contains(err.Error(), "MissingGroup") || !strings.Contains(err.Error(), "line 12") {
+		t.Fatalf("native details lost: %v", err)
+	}
+	yq := filepath.Join(r.dir, "bin", "yq")
+	if err := os.WriteFile(yq, []byte("#!/bin/bash\necho 'yaml: line 4: did not find expected key' >&2\nexit 1\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	_, err = parseConfig(context.Background(), path)
+	if err == nil || !strings.Contains(err.Error(), "line 4") || !strings.Contains(err.Error(), path) {
+		t.Fatalf("YAML details lost: %v", err)
 	}
 }
