@@ -130,7 +130,7 @@
             #logStatus[data-state="connected"] { color: var(--success); }
             #logStatus[data-state="error"] { color: var(--error); }
             #logOutput { flex: 1; min-height: 0; overflow: auto; overflow-anchor: none; overscroll-behavior: contain;
-                padding: 12px; border-top: 1px solid var(--border); background: var(--panel-soft); color: var(--text-strong);
+                padding: 12px; border: 1px solid var(--border); border-radius: var(--radius-panel); background: var(--panel-soft); color: var(--text-strong);
                 font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace; font-size: .8125rem; line-height: 1.65; tab-size: 4; }
             #logOutput:empty::after { content: "等待 Mihomo 日志…"; color: var(--text-muted); }
             .log-line { display: grid; grid-template-columns: 12ch 5ch minmax(24ch, 1fr); column-gap: 1ch; padding: 1px 0; }
