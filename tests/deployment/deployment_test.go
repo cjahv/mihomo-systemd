@@ -145,7 +145,7 @@ func TestUpdateDoesNotInstallRuntime(t *testing.T) {
 
 // Execute the production installer while mapping privileged paths to a fixture.
 func TestRuntimeInstallerOwnsBinaryAndSystemdUnits(t *testing.T) {
-	for _, scenario := range []string{"current", "dns-failure", "offline", "invalid-release", "artifact-failure", "unusable-core", "unusable-core-offline", "verified-release", "corrupt-release", "special-path", "same-release", "same-release-no-assets", "force-same-release", "path-shadow", "path-newer-shadow", "unknown-banner", "prerelease-banner", "apply-changed", "repaired-core", "first-install"} {
+	for _, scenario := range []string{"current", "dns-failure", "offline", "invalid-release", "artifact-failure", "unusable-core", "unusable-core-offline", "verified-release", "corrupt-release", "special-path", "same-release", "same-release-no-assets", "force-same-release", "path-shadow", "path-newer-shadow", "unknown-banner", "prerelease-banner", "apply-changed", "repaired-core", "first-install", "panel-migration"} {
 		t.Run(scenario, func(t *testing.T) { testRuntimeInstaller(t, scenario) })
 	}
 }
@@ -156,11 +156,17 @@ func testRuntimeInstaller(t *testing.T, scenario string) {
 	if scenario == "special-path" {
 		dir = filepath.Join(dir, `runtime space "quote" 'single' %n $PATH \backslash`)
 	}
-	for _, name := range []string{"deploy/install.sh", "deploy/lib/target.sh", "deploy/lib/env.sh", "deploy/lib/http.sh", "deploy/lib/release.sh", "deploy/scripts/update.sh", "deploy/scripts/entrypoint.sh", "deploy/systemd/mihomo.service.in", "deploy/systemd/mihomo-manager.service.in"} {
+	for _, name := range []string{"deploy/install.sh", "deploy/lib/target.sh", "deploy/lib/env.sh", "deploy/lib/http.sh", "deploy/lib/release.sh", "deploy/scripts/update.sh", "deploy/scripts/entrypoint.sh", "deploy/scripts/panel-route-bridge.js", "deploy/systemd/mihomo.service.in", "deploy/systemd/mihomo-manager.service.in"} {
 		copyDeploymentFile(t, dir, name)
 	}
 	deployDir := filepath.Join(dir, "deploy")
-	writeDeploymentFixture(t, filepath.Join(deployDir, "ui", "index.html"), "panel")
+	panelHTML := "panel"
+	if scenario == "panel-migration" {
+		panelHTML = `<html><head><title>MetaCubeXD</title><script type="module" src="./_nuxt/app.js"></script></head></html>`
+		writeDeploymentFixture(t, filepath.Join(deployDir, "ui", "_nuxt", "app.js"), "existing panel asset")
+		writeDeploymentFixture(t, filepath.Join(deployDir, "ui", "sw.js"), "t([{url:`./`,revision:`baseline`}]);")
+	}
+	writeDeploymentFixture(t, filepath.Join(deployDir, "ui", "index.html"), panelHTML)
 	writeDeploymentFixture(t, filepath.Join(deployDir, ".env"), "GITHUB_PROXY=\nGITHUB_API_PROXY=\n")
 	artifact := filepath.Join(dir, "prebuilt-manager")
 	writeDeploymentFixture(t, artifact, "#!/bin/bash\necho 'mihomo-manager go1.26.8 linux/amd64'\n")
@@ -310,6 +316,10 @@ printf '{"tag_name":"v1.0.0"}' > "$2"
 	if scenario == "apply-changed" {
 		writeDeploymentFixture(t, installedCore, "#!/bin/bash\necho changed-after-prepare\n")
 	}
+	panelIndex := filepath.Join(deployDir, "ui", "index.html")
+	if data, err := os.ReadFile(panelIndex); err != nil || string(data) != panelHTML {
+		t.Fatalf("preparation changed live panel: %s %v", data, err)
+	}
 	beforeApply, err := os.Stat(installedCore)
 	if err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
@@ -325,6 +335,21 @@ printf '{"tag_name":"v1.0.0"}' > "$2"
 	applyOut, err := apply.CombinedOutput()
 	if err != nil {
 		t.Fatalf("apply failed: %v %s", err, applyOut)
+	}
+	if scenario == "panel-migration" {
+		for path, want := range map[string]string{
+			"index.html":            `<script src="./mihomo-panel-route.js"></script>`,
+			"_nuxt/app.js":          "existing panel asset",
+			"mihomo-panel-route.js": "mihomo-panel-route-v1",
+			"sw.js":                 "baseline-mihomo-route-v1",
+		} {
+			data, err := os.ReadFile(filepath.Join(deployDir, "ui", path))
+			if err != nil || !strings.Contains(string(data), want) {
+				t.Fatalf("panel migration %s: %v %s", path, err, data)
+			}
+		}
+	} else if data, err := os.ReadFile(panelIndex); err != nil || string(data) != panelHTML {
+		t.Fatalf("custom panel changed: %s %v", data, err)
 	}
 	afterApply, err := os.Stat(installedCore)
 	if err != nil {

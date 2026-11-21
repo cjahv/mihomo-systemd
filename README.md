@@ -169,7 +169,7 @@ mihomo-systemd/
 └── mise.toml                  # 工具版本及开发、验证、发布任务
 ```
 
-`cmd` 依赖 `internal/manager`，管理器内部实现不作为公共库暴露。管理页面通过 `go:embed` 编译进二进制，版本与后端一起发布，无需上传独立 HTML，也不依赖启动目录中的页面文件。Mihomo 的 MetaCubeXD 外部面板仍由运行时安装器下载到 `ui/`。
+`cmd` 依赖 `internal/manager`，管理器内部实现不作为公共库暴露。管理页面通过 `go:embed` 编译进二进制，版本与后端一起发布，无需上传独立 HTML，也不依赖启动目录中的页面文件。Mihomo 的 MetaCubeXD 外部面板由运行时安装器下载校验后的固定构建并安装到 `ui/`。
 
 本地发布脚本以仓库根目录为工作目录，运行脚本以运行包根目录为工作目录。生产包由 `deploy/` 与本地编译产物组成；测试、源码和文档不进入生产包。systemd 服务模板只由安装器渲染、安装、启用，配置更新不创建服务。
 
@@ -360,3 +360,5 @@ HTTP provider 按缓存文件的修改时间与 `interval`（秒）判断是否�
 可选真实内核验收：指定 `MIHOMO_TEST_BINARY` 与 `YQ_TEST_BINARY` 为本机二进制绝对路径，再执行 `mise run test`。该测试通过真实 Mihomo 访问本地 HTTPS 测试端点，不修改防火墙或访问公网。
 
 可选浏览器验收：设置 `MIHOMO_UI_ACCEPTANCE=1`、`MIHOMO_UI_ACCEPTANCE_STOP` 为一个尚不存在的停止标记文件绝对路径，运行 `mise exec -- go test ./internal/manager -run '^TestUIAcceptanceServer$' -v -timeout 4m`，打开打印的本机 URL。使用测试密钥 `example`，点击更新并在过程中刷新；预期 5 秒检测失败后显示回滚成功。确认结果后创建停止标记文件，测试会核对旧配置恢复并退出。此测试使用临时文件和受控运行时，不操作真实系统服务。设置 `MIHOMO_UI_ACCEPTANCE_FAILURE=1` 可改为验证准备脚本失败：预期更新结束后关闭进度，并以浮动提示报告更新被拒绝；展开提示详情可查看完整测试 URL、curl 错误和脚本失败消息。
+
+管理页面支持直接打开 `/#/settings`（设置）和 `/#/logs`（运行日志）。支持路由同步的 MetaCubeXD 面板还会把当前页面显示在管理器地址栏，如 `/#/panel/proxies`、`/#/panel/connections` 和 `/#/panel/logs`（面板日志）。复制地址可以分享当前页面，首次打开时需完成密钥校验和面板连接。新版安装会附带路由同步脚本，已有 Nuxt 版 MetaCubeXD 在下一次发布时接入，旧版或自定义面板继续使用原有入口。

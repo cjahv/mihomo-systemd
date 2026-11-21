@@ -28,7 +28,7 @@ for cmd in curl jq sudo tar nft install mktemp systemctl gzip cmp; do
 done
 command -v sha256sum >/dev/null || command -v shasum >/dev/null || error '缺少 SHA256 校验工具'
 load_env_file .env || error '运行包缺少 .env'
-for file in scripts/update.sh scripts/entrypoint.sh systemd/mihomo.service.in systemd/mihomo-manager.service.in; do
+for file in scripts/update.sh scripts/entrypoint.sh scripts/panel-route-bridge.js systemd/mihomo.service.in systemd/mihomo-manager.service.in; do
     [ -f "$file" ] || error "运行包缺少 $file"
 done
 chmod +x scripts/update.sh scripts/entrypoint.sh
@@ -81,15 +81,53 @@ prepare_core() {
 }
 
 prepare_ui() {
-    if [ -f "${MIHOMO_SOURCE_DIR:-$PWD}/ui/index.html" ]; then
-        info '已有可用 UI，保留现有面板'
-        return
+    local existing="${MIHOMO_SOURCE_DIR:-$PWD}/ui"
+    local panel_commit=a861479ea092904102777a7f130aaf62915dea75
+    local panel_sha256=7b627b96ff2cc35f342c7a3f3d29ec309b6a9b73abe40ab9c94
+    local bridge=scripts/panel-route-bridge.js
+    local ui="$PREPARED_DIR/ui" temporary
+
+    if [ -f "$existing/index.html" ]; then
+        if [ -L "$existing" ] || [ -L "$existing/index.html" ] ||
+           ! grep -Fq '<title>MetaCubeXD</title>' "$existing/index.html" ||
+           ! grep -Fq './_nuxt/' "$existing/index.html" ||
+           ! grep -Fq '<head>' "$existing/index.html"; then
+            info '保留现有自定义或旧版面板'
+            return
+        fi
+        if grep -Fq '<script src="./mihomo-panel-route.js"></script>' "$existing/index.html" &&
+           cmp -s "$bridge" "$existing/mihomo-panel-route.js"; then
+            info '已有支持页面定位的面板'
+            return
+        fi
+        info '准备为现有 MetaCubeXD 面板添加页面定位'
+        cp -a "$existing" "$ui"
+    else
+        info '准备 MetaCubeXD 面板...'
+        github_download "$PREPARED_DIR/ui.tar.gz" 300 134217728 "${GITHUB_PROXY:-}" "https://github.com/MetaCubeX/metacubexd/archive/$panel_commit.tar.gz" || error '面板下载失败'
+        verify_asset "$panel_sha256" "$PREPARED_DIR/ui.tar.gz" || error '面板发布包完整性检查失败'
+        mkdir "$ui"
+        tar -xzf "$PREPARED_DIR/ui.tar.gz" --strip-components=1 -C "$ui" || error '面板解压失败'
     fi
-    info '准备 MetaCubeXD 面板...'
-    github_download "$PREPARED_DIR/ui.tar.gz" 300 134217728 "${GITHUB_PROXY:-}" https://github.com/MetaCubeX/metacubexd/archive/refs/heads/gh-pages.tar.gz || error '面板下载失败'
-    mkdir "$PREPARED_DIR/ui"
-    tar -xzf "$PREPARED_DIR/ui.tar.gz" --strip-components=1 -C "$PREPARED_DIR/ui" || error '面板解压失败'
-    [ -f "$PREPARED_DIR/ui"/index.html ] || error '面板发布包无效'
+    [ -f "$ui/index.html" ] && grep -Fq '<head>' "$ui/index.html" || error '面板发布包无效'
+    rm -f "$ui/mihomo-panel-route.js"
+    install -m 0644 "$bridge" "$ui/mihomo-panel-route.js"
+    if ! grep -Fq '<script src="./mihomo-panel-route.js"></script>' "$ui/index.html"; then
+        temporary=$(mktemp "$ui/.index.XXXXXX")
+        sed 's|<head>|<head><script src="./mihomo-panel-route.js"></script>|' "$ui/index.html" > "$temporary"
+        chmod 0644 "$temporary"
+        mv -f "$temporary" "$ui/index.html"
+
+        # This Workbox build precaches the UI root. Change its revision so an
+        # existing service worker fetches the new shell on its next update.
+        if [ -f "$ui/sw.js" ] && [ ! -L "$ui/sw.js" ] &&
+           grep -Fq 'url:`./`,revision:`' "$ui/sw.js"; then
+            temporary=$(mktemp "$ui/.sw.XXXXXX")
+            sed 's/\(url:`\.\/`,revision:`[^`]*\)`/\1-mihomo-route-v1`/' "$ui/sw.js" > "$temporary"
+            chmod 0644 "$temporary"
+            mv -f "$temporary" "$ui/sw.js"
+        fi
+    fi
 }
 
 install_binary() {
