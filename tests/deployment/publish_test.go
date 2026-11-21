@@ -426,3 +426,57 @@ func TestPublishRejectsConflictingModesBeforeRemoteAccess(t *testing.T) {
 		}
 	}
 }
+
+// The host argument must replace .env for this run only, and invalid values must stop before SSH.
+func TestPublishHostArgument(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		args     []string
+		wantOut  string
+		wantHost string
+		wantSSH  bool
+	}{
+		{name: "override", args: []string{"override.invalid"}, wantOut: "发布目标: root@override.invalid", wantHost: "override.invalid", wantSSH: true},
+		{name: "invalid", args: []string{"bad host"}, wantOut: "远端主机参数无效", wantSSH: false},
+		{name: "empty", args: []string{""}, wantOut: "远端主机参数无效", wantSSH: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			bin := filepath.Join(dir, "bin")
+			logPath := filepath.Join(dir, "log")
+			if err := os.Mkdir(bin, 0755); err != nil {
+				t.Fatal(err)
+			}
+			for _, name := range []string{"scripts/publish.sh", "deploy/lib/env.sh", "deploy/lib/target.sh"} {
+				copyDeploymentFile(t, dir, name)
+			}
+			writeDeploymentFixture(t, filepath.Join(dir, ".env"), "REMOTE_USER=root\nREMOTE_HOST=example.invalid\nREMOTE_DIR=/root/mihomo\n")
+			writeDeploymentFixture(t, filepath.Join(bin, "mise"), "#!/bin/bash\nexit 0\n")
+			writeDeploymentFixture(t, filepath.Join(bin, "ssh"), `#!/bin/bash
+printf 'ssh %s\n' "$*" >> "$TEST_LOG"
+exit 255
+`)
+			cmd := exec.Command("bash", append([]string{"./scripts/publish.sh"}, tc.args...)...)
+			cmd.Dir = dir
+			cmd.Env = append(os.Environ(), "PATH="+bin+":"+os.Getenv("PATH"), "TEST_LOG="+logPath)
+			out, err := cmd.CombinedOutput()
+			if err == nil {
+				t.Fatalf("publish unexpectedly succeeded: %s", out)
+			}
+			if !strings.Contains(string(out), tc.wantOut) {
+				t.Fatalf("missing %q in output: %s", tc.wantOut, out)
+			}
+			data, _ := os.ReadFile(logPath)
+			log := string(data)
+			if !tc.wantSSH {
+				if log != "" {
+					t.Fatalf("remote access happened for invalid host: %s", log)
+				}
+				return
+			}
+			if !strings.Contains(log, tc.wantHost) || strings.Contains(log, "example.invalid") {
+				t.Fatalf("host argument did not replace REMOTE_HOST: %s", log)
+			}
+		})
+	}
+}
