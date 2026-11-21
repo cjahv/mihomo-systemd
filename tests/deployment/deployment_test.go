@@ -161,7 +161,7 @@ func testRuntimeInstaller(t *testing.T, scenario string) {
 	}
 	deployDir := filepath.Join(dir, "deploy")
 	writeDeploymentFixture(t, filepath.Join(deployDir, "ui", "index.html"), "panel")
-	writeDeploymentFixture(t, filepath.Join(deployDir, ".env"), "GITHUB_PROXY=\nGITHUB_API_PROXY=\n")
+	writeDeploymentFixture(t, filepath.Join(deployDir, ".env"), "GITHUB_PROXY=https://legacy-proxy.invalid/\nGITHUB_API_PROXY=https://legacy-proxy.invalid/\n")
 	artifact := filepath.Join(dir, "prebuilt-manager")
 	writeDeploymentFixture(t, artifact, "#!/bin/bash\necho 'mihomo-manager go1.26.8 linux/amd64'\n")
 	downloadVersion := "v1.0.1"
@@ -298,6 +298,9 @@ printf '{"tag_name":"v1.0.0"}' > "$2"
 	if err != nil {
 		t.Fatal(err)
 	}
+	if !strings.HasPrefix(string(downloads), "https://api.github.com/repos/MetaCubeX/mihomo/releases/latest\n") || strings.Contains(string(downloads), "https://legacy-proxy.invalid/") {
+		t.Fatalf("unexpected release download URLs: %s", downloads)
+	}
 	wantDownload := scenario == "verified-release" || scenario == "force-same-release" || scenario == "path-newer-shadow" || scenario == "unknown-banner" || scenario == "prerelease-banner" || scenario == "artifact-failure" || scenario == "repaired-core" || scenario == "first-install"
 	if strings.Contains(string(downloads), "releases/download") != wantDownload {
 		t.Fatalf("unexpected core download decision: %s\n%s", downloads, out)
@@ -385,9 +388,9 @@ func TestSharedEnvironmentParserTreatsValuesAsData(t *testing.T) {
 	envFile := filepath.Join(dir, ".env")
 	marker := filepath.Join(dir, "executed")
 	literal := "$(touch '" + marker + "')"
-	writeDeploymentFixture(t, envFile, "export MIHOMO_SECRET='example'\nCONFIG_URL=\"https://example.invalid/?a=b\"\nGITHUB_PROXY="+literal+"\n")
+	writeDeploymentFixture(t, envFile, "export MIHOMO_SECRET='example'\nCONFIG_URL=\"https://example.invalid/?a=b\"\nFIXTURE_LITERAL="+literal+"\n")
 	script := filepath.Join(repositoryRoot(t), "deploy", "lib", "env.sh")
-	cmd := exec.Command("bash", "-c", `source "$1"; load_env_file "$2"; printf '%s\n' "$MIHOMO_SECRET" "$CONFIG_URL" "$GITHUB_PROXY"`, "env", script, envFile)
+	cmd := exec.Command("bash", "-c", `source "$1"; load_env_file "$2"; printf '%s\n' "$MIHOMO_SECRET" "$CONFIG_URL" "$FIXTURE_LITERAL"`, "env", script, envFile)
 	cmd.Dir = dir
 	out, err := cmd.CombinedOutput()
 	if err != nil || string(out) != "example\nhttps://example.invalid/?a=b\n"+literal+"\n" {

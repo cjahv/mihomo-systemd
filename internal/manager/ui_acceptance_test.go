@@ -22,7 +22,7 @@ func TestUIAcceptanceServer(t *testing.T) {
 		t.Fatal("MIHOMO_UI_ACCEPTANCE_STOP is required")
 	}
 	dir := t.TempDir()
-	for name, data := range map[string]string{"config.yaml": "old", "cn_cidr.txt": "old-cidr", ".env": "MIHOMO_SECRET=example\nCONFIG_URL=https://example.com/subscription/config.yaml\nSKIP_CNIP=true\nQUIC=false\nLOCAL_LOOPBACK_PROXY=false\nGITHUB_PROXY=\nGITHUB_API_PROXY=\n"} {
+	for name, data := range map[string]string{"config.yaml": "old", "cn_cidr.txt": "old-cidr", ".env": "MIHOMO_SECRET=example\nCONFIG_URL=https://example.com/subscription/config.yaml\nSKIP_CNIP=true\nQUIC=false\nLOCAL_LOOPBACK_PROXY=false\n"} {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(data), 0600); err != nil {
 			t.Fatal(err)
 		}

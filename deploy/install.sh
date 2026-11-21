@@ -43,7 +43,7 @@ prepare_core() {
     else current=""
     fi
     info '正在获取 Mihomo 最新版本...'
-    if ! github_download "$metadata" 90 4194304 "${GITHUB_API_PROXY:-}" https://api.github.com/repos/MetaCubeX/mihomo/releases/latest ||
+    if ! http_download "$metadata" 90 4194304 https://api.github.com/repos/MetaCubeX/mihomo/releases/latest ||
        ! latest=$(jq -er '.tag_name | select(type == "string" and test("^v[0-9]+\\.[0-9]+\\.[0-9]+$"))' "$metadata"); then
         [ -n "$current" ] || error '发布信息不可用或缺少可验证的基线包，且没有可运行核心'
         warn '无法取得可验证的发布包，保留已验证可运行的核心；本次未更新核心'
@@ -66,9 +66,9 @@ prepare_core() {
         return
     fi
     info "选择 CPU 基线发布包: ${name}，版本 $latest"
-    if ! github_download "$PREPARED_DIR/core.gz" 600 268435456 "${GITHUB_PROXY:-}" "https://github.com/MetaCubeX/mihomo/releases/download/$latest/$name"; then
+    if ! http_download "$PREPARED_DIR/core.gz" 600 268435456 "https://github.com/MetaCubeX/mihomo/releases/download/$latest/$name"; then
         [ -n "$current" ] || error '核心下载失败，首次安装无法继续'
-        warn '所有核心下载来源失败，保留当前可运行核心；本次未更新核心'
+        warn '核心下载失败，保留当前可运行核心；本次未更新核心'
         cp "$current" "$PREPARED_DIR/mihomo"
         chmod 0755 "$PREPARED_DIR/mihomo"
         return
@@ -86,7 +86,7 @@ prepare_ui() {
         return
     fi
     info '准备 MetaCubeXD 面板...'
-    github_download "$PREPARED_DIR/ui.tar.gz" 300 134217728 "${GITHUB_PROXY:-}" https://github.com/MetaCubeX/metacubexd/archive/refs/heads/gh-pages.tar.gz || error '面板下载失败'
+    http_download "$PREPARED_DIR/ui.tar.gz" 300 134217728 https://github.com/MetaCubeX/metacubexd/archive/refs/heads/gh-pages.tar.gz || error '面板下载失败'
     mkdir "$PREPARED_DIR/ui"
     tar -xzf "$PREPARED_DIR/ui.tar.gz" --strip-components=1 -C "$PREPARED_DIR/ui" || error '面板解压失败'
     [ -f "$PREPARED_DIR/ui"/index.html ] || error '面板发布包无效'

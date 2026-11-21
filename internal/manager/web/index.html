@@ -288,13 +288,6 @@ SOFTWARE.
                                     <div class="field"><label for="configFileUrl">订阅地址</label><input type="url" inputmode="url" spellcheck="false" id="configFileUrl" name="configFileUrl" placeholder="https://example.com/config.yaml" /></div>
                                     <div class="field"><label for="mihomoApiKey">控制面板密钥</label><input type="password" autocomplete="new-password" id="mihomoApiKey" name="mihomoApiKey" placeholder="留空保留当前密钥" /></div>
                                 </fieldset>
-                                <fieldset class="settings-card wide">
-                                    <legend>下载来源</legend>
-                                    <div class="field-grid">
-                                        <div class="field"><label for="githubProxy">GitHub 下载代理</label><input type="url" inputmode="url" spellcheck="false" id="githubProxy" name="githubProxy" placeholder="https://gh.example.com/" /></div>
-                                        <div class="field"><label for="githubApiProxy">GitHub API 代理</label><input type="url" inputmode="url" spellcheck="false" id="githubApiProxy" name="githubApiProxy" placeholder="https://gh.example.com/" /></div>
-                                    </div>
-                                </fieldset>
                             </div>
                             <div class="settings-actions"><button id="saveSettingsBtn" class="nav-button primary-button"><svg class="icon " aria-hidden="true" focusable="false"><use href="#icon-device-floppy"></use></svg><span>保存并更新</span></button></div>
                         </div>
@@ -615,7 +608,7 @@ SOFTWARE.
                         if (controller.signal.aborted || signedOut) return;
                         if (!data.success || !data.data) throw new Error(data.msg || "设置数据不可用");
                         const booleanSettings = { SKIP_CNIP: "skipCnIp", QUIC: "enableQuic", LOCAL_LOOPBACK_PROXY: "enableTransparentProxy" };
-                        const textSettings = { CONFIG_URL: "configFileUrl", GITHUB_PROXY: "githubProxy", GITHUB_API_PROXY: "githubApiProxy" };
+                        const textSettings = { CONFIG_URL: "configFileUrl" };
                         for (const [key, id] of Object.entries(booleanSettings)) {
                             document.getElementById(id).checked = data.data[key] === "true";
                         }
@@ -651,7 +644,7 @@ SOFTWARE.
                 let loadingSettings = false;
                 let settingsLoaded = false;
                 let settingsController = null;
-                const settingsFields = ["skipCnIp", "enableQuic", "enableTransparentProxy", "configFileUrl", "mihomoApiKey", "githubProxy", "githubApiProxy"].map(id => document.getElementById(id));
+                const settingsFields = ["skipCnIp", "enableQuic", "enableTransparentProxy", "configFileUrl", "mihomoApiKey"].map(id => document.getElementById(id));
                 let signedOut = false;
                 let logCharacters = 0;
                 let displayedTask = "";
@@ -923,8 +916,6 @@ SOFTWARE.
                         QUIC: document.getElementById("enableQuic").checked ? "true" : "false",
                         LOCAL_LOOPBACK_PROXY: document.getElementById("enableTransparentProxy").checked ? "true" : "false",
                         CONFIG_URL: document.getElementById("configFileUrl").value,
-                        GITHUB_PROXY: document.getElementById("githubProxy").value,
-                        GITHUB_API_PROXY: document.getElementById("githubApiProxy").value,
                         secret: localStorage.getItem("mihomo_secret") || "",
                     };
                     if (newSecret) settings.MIHOMO_SECRET = newSecret;

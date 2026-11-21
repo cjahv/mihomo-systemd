@@ -11,7 +11,7 @@ import (
 	"testing"
 )
 
-// Replay resolver, origin and partial-transfer failures without public requests.
+// Replay resolver and partial-transfer failures without public requests.
 func TestHTTPDownloadFallbackAndAtomicReplacement(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
@@ -21,10 +21,9 @@ func TestHTTPDownloadFallbackAndAtomicReplacement(t *testing.T) {
 		{"system", 1, false},
 		{"dns-failure", 2, false},
 		{"first-doh-failure", 3, false},
-		{"proxy-failure", 5, false},
-		{"all-failure", 6, true},
-		{"certificate-failure", 6, true},
-		{"disabled", 2, true},
+		{"all-failure", 3, true},
+		{"certificate-failure", 3, true},
+		{"disabled", 1, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -58,7 +57,6 @@ printf partial > "$output"
 case "$TEST_CASE" in
     all-failure|disabled) exit 6 ;;
     certificate-failure) exit 60 ;;
-    proxy-failure) [[ "$url" != https://proxy.invalid/* ]] || exit 22 ;;
 esac
 if [ "$TEST_CASE" != system ]; then
     [ "$resolver" != system ] || exit 6
@@ -67,7 +65,7 @@ if [ "$TEST_CASE" = first-doh-failure ] && [[ "$resolver" = *alidns* ]]; then ex
 printf complete > "$output"
 `)
 			module := filepath.Join(repositoryRoot(t), "deploy", "lib", "http.sh")
-			cmd := exec.Command("bash", "-c", `source "$1"; github_download "$2" 60 1000 https://proxy.invalid 'https://official.invalid/config?token=sensitive-fixture'`, "download", module, output)
+			cmd := exec.Command("bash", "-c", `source "$1"; http_download "$2" 60 1000 'https://official.invalid/config?token=sensitive-fixture'`, "download", module, output)
 			cmd.Dir = dir
 			cmd.Env = append(os.Environ(), "PATH="+dir+":"+os.Getenv("PATH"), "MIHOMO_SOURCE_DIR="+dir, "DOWNLOAD_PROGRESS=off", "TEST_EVENTS="+events, "TEST_CASE="+tc.name, "DOWNLOAD_DOH_SERVERS=dns.alidns.com:223.5.5.5 cloudflare-dns.com:1.1.1.1")
 			if tc.name == "disabled" {
@@ -77,11 +75,8 @@ printf complete > "$output"
 			if (err != nil) != tc.failure {
 				t.Fatalf("error=%v logs=%s", err, logs)
 			}
-			if !strings.HasPrefix(string(logs), "[下载] https://proxy.invalid/https://official.invalid/config?token=sensitive-fixture（开始）\n") {
+			if !strings.HasPrefix(string(logs), "[下载] https://official.invalid/config?token=sensitive-fixture（开始）\n") {
 				t.Fatalf("missing actual source URL: %s", logs)
-			}
-			if tc.name == "proxy-failure" && !strings.Contains(string(logs), "[下载] https://official.invalid/config?token=sensitive-fixture（开始）\n") {
-				t.Fatalf("fallback did not identify the new source URL: %s", logs)
 			}
 			data, _ := os.ReadFile(output)
 			want := "complete"
@@ -95,8 +90,8 @@ printf complete > "$output"
 			if count := strings.Count(string(attempts), "\n"); count != tc.attempts {
 				t.Fatalf("attempts=%d want=%d: %s", count, tc.attempts, attempts)
 			}
-			if !strings.HasPrefix(string(attempts), "https://proxy.invalid/") {
-				t.Fatal("did not prefer configured origin")
+			if !strings.HasPrefix(string(attempts), "https://official.invalid/") {
+				t.Fatal("did not request the original URL")
 			}
 			pending, _ := filepath.Glob(output + ".http.*")
 			if len(pending) != 0 {

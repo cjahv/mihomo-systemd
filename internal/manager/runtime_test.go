@@ -53,14 +53,14 @@ exit 0
 
 func TestEnvironmentReaderKeepsValuesAsData(t *testing.T) {
 	path := filepath.Join(t.TempDir(), ".env")
-	if e := os.WriteFile(path, []byte("# comment\nexport MIHOMO_SECRET='example'\nCONFIG_URL=\"https://example.invalid/?a=b\"\nGITHUB_PROXY=$(do-not-execute)\n"), 0600); e != nil {
+	if e := os.WriteFile(path, []byte("# comment\nexport MIHOMO_SECRET='example'\nCONFIG_URL=\"https://example.invalid/?a=b\"\nFIXTURE_LITERAL=$(do-not-execute)\n"), 0600); e != nil {
 		t.Fatal(e)
 	}
 	env, e := readEnvironment(path)
 	if e != nil {
 		t.Fatal(e)
 	}
-	if env["MIHOMO_SECRET"] != "example" || env["CONFIG_URL"] != "https://example.invalid/?a=b" || env["GITHUB_PROXY"] != "$(do-not-execute)" {
+	if env["MIHOMO_SECRET"] != "example" || env["CONFIG_URL"] != "https://example.invalid/?a=b" || env["FIXTURE_LITERAL"] != "$(do-not-execute)" {
 		t.Fatalf("unexpected parsing: %+v", env)
 	}
 }

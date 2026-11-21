@@ -185,7 +185,7 @@ mihomo-systemd/
 
 DoH 服务自身由固定 IP 引导，因此不依赖 `/etc/resolv.conf`，也不发送可能再次被 Mihomo 重定向的 UDP 53 查询。curl 的原生 DoH 同时解析重定向后的域名，目标站点与 DoH 服务均保留 HTTPS 证书校验；需要支持 DoH 的 curl（7.62.0 或更新版本）。
 
-GitHub API、核心发布包和 MetaCubeXD 面板在配置的代理前缀失败后尝试官方来源；订阅只请求原始地址，避免将私有订阅发送到其他下载服务。各来源和 DNS 尝试共用总时限，临时文件下载成功后才替换目标。下载不读取 `.curlrc`，不使用环境中的 HTTP 代理；宿主机透明代理仍可能影响 HTTPS，网络完全中断时 DoH 也无法恢复连接。
+安装时直接请求 GitHub 官方 API、核心发布包和 MetaCubeXD 面板地址。订阅只请求原始地址。各次 DNS 尝试共用总时限，临时文件下载成功后才替换目标。下载不读取 `.curlrc`，不使用环境中的 HTTP 代理；宿主机透明代理仍可能影响 HTTPS，网络完全中断时 DoH 也无法恢复连接。
 
 `DOWNLOAD_DOH_SERVERS` 在未配置时默认使用 `dns.alidns.com:223.5.5.5 cloudflare-dns.com:1.1.1.1`，格式为以空格分隔的 `host:bootstrap-IP`，支持 IPv4/IPv6 引导地址，服务路径为 `/dns-query`。客户内网可指定自有 DoH 并安装受信任的根证书；设置空值禁用外部 DoH。DoH 只发送待解析域名，不包含订阅路径或令牌。
 
