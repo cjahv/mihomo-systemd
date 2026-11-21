@@ -72,6 +72,8 @@
             .brand-wordmark { color: var(--text-strong); font-size: 1.25rem; font-weight: 750; letter-spacing: -.045em; line-height: 1; }
             .toolbar-nav { display: flex; gap: 8px; }
             .toolbar-spacer { flex: 1; }
+            .toolbar-slot { display: flex; align-items: center; flex-shrink: 0; }
+            .toolbar-group { display: flex; align-items: center; gap: 12px; }
             .nav-button { position: relative; display: inline-flex; align-items: center; justify-content: center; gap: 8px;
                 min-height: 44px; padding: 8px 16px; background: var(--neutral); color: var(--text);
                 border: 1px solid var(--border); border-radius: var(--radius-field); font-size: .875rem; font-weight: 500;
@@ -122,11 +124,7 @@
                 background: var(--text); border-radius: 50%; transition: transform var(--motion-fast), background-color var(--motion-fast); }
             .switch-row input:checked { background: var(--primary); border-color: var(--primary); }
             .switch-row input:checked::before { transform: translateX(18px); background: var(--on-primary); }
-            .settings-actions { flex-shrink: 0; display: flex; align-items: center; flex-wrap: wrap; gap: 16px; padding: 16px 0 max(16px, env(safe-area-inset-bottom));
-                margin-top: 8px; background: var(--bg); border-top: 1px solid var(--border); }
             .logs-view { position: relative; display: flex; flex-direction: column; overflow: hidden; }
-            .logs-view .view-heading { flex-shrink: 0; }
-            .log-actions { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
             #logStatus { display: inline-flex; align-items: center; gap: 8px; color: var(--text-muted); font-size: .8125rem; overflow-wrap: anywhere; }
             #logStatus::before { content: ""; width: 7px; height: 7px; flex-shrink: 0; border-radius: 50%; background: currentColor; }
             #logStatus[data-state="connected"] { color: var(--success); }
@@ -185,6 +183,13 @@
                 .settings-grid, .field-grid { grid-template-columns: minmax(0, 1fr); }
                 .settings-card.wide { grid-column: auto; }
                 .settings-view, .logs-view { padding: 16px; }
+            }
+            @media (max-width: 640px) {
+                #logStatus { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+                #updateBtn { width: 44px; min-width: 44px; padding: 10px; }
+                #updateBtnLabel { display: none; }
+                #saveSettingsBtn { width: 44px; min-width: 44px; padding: 10px; }
+                #saveSettingsBtn > span { display: none; }
             }
             @media (max-width: 420px) {
                 .brand { gap: 6px; margin-right: 4px; }
@@ -270,6 +275,7 @@ SOFTWARE.
                         <button id="logsBtn" class="nav-button icon-button" aria-label="Mihomo 日志" aria-pressed="false" data-tooltip="Mihomo 日志"><svg class="icon " aria-hidden="true" focusable="false"><use href="#icon-file-text"></use></svg></button>
                     </nav>
                     <div class="toolbar-spacer"></div>
+                    <div id="toolbarSlot" class="toolbar-slot" hidden><div id="logsToolbar" class="toolbar-group" hidden><span id="logStatus" role="status">尚未连接</span><button id="updateBtn" class="nav-button" aria-label="更新订阅"><svg class="icon" aria-hidden="true" focusable="false"><use href="#icon-refresh"></use></svg><span id="updateBtnLabel">更新订阅</span></button></div><div id="settingsToolbar" class="toolbar-group" hidden><button id="saveSettingsBtn" class="nav-button primary-button" aria-label="保存并更新"><svg class="icon " aria-hidden="true" focusable="false"><use href="#icon-device-floppy"></use></svg><span>保存并更新</span></button></div></div>
                     <button id="logoutBtn" class="nav-button icon-button exit" aria-label="退出控制台" data-tooltip="退出控制台"><svg class="icon " aria-hidden="true" focusable="false"><use href="#icon-logout"></use></svg></button>
                 </header>
                 <main class="top-area" id="topArea" style="display: none">
@@ -289,12 +295,9 @@ SOFTWARE.
                                     <div class="field"><label for="mihomoApiKey">控制面板密钥</label><input type="password" autocomplete="new-password" id="mihomoApiKey" name="mihomoApiKey" placeholder="留空保留当前密钥" /></div>
                                 </fieldset>
                             </div>
-                            <div class="settings-actions"><button id="saveSettingsBtn" class="nav-button primary-button"><svg class="icon " aria-hidden="true" focusable="false"><use href="#icon-device-floppy"></use></svg><span>保存并更新</span></button></div>
                         </div>
                     </div>
                     <div id="logsView" class="logs-view" style="display: none">
-                        <div class="view-heading"><div><h1>Mihomo 日志</h1></div><div class="log-actions"><span id="logStatus" role="status">尚未连接</span><button id="updateBtn" class="nav-button" aria-label="更新订阅"><svg class="icon" aria-hidden="true" focusable="false"><use href="#icon-refresh"></use></svg><span id="updateBtnLabel">更新订阅</span></button></div></div>
-
                         <div id="logOutput" role="log" aria-label="Mihomo 日志，最新在上" aria-live="off" tabindex="0"></div>
                         <aside id="updateOverlay" class="update-overlay" aria-label="更新状态" hidden>
                             <button id="updateToggle" aria-expanded="true" aria-controls="updateHistory"><svg class="icon " aria-hidden="true" focusable="false"><use href="#icon-refresh"></use></svg><span class="update-copy"><span id="updateSummary"></span></span><svg class="icon update-chevron" aria-hidden="true" focusable="false"><use href="#icon-chevron-down"></use></svg></button>
@@ -526,6 +529,9 @@ SOFTWARE.
                 const settingsView = document.getElementById("settingsView");
                 const logsView = document.getElementById("logsView");
                 const logOutput = document.getElementById("logOutput");
+                const toolbarSlot = document.getElementById("toolbarSlot");
+                const logsToolbar = document.getElementById("logsToolbar");
+                const settingsToolbar = document.getElementById("settingsToolbar");
 
                 document.addEventListener("copy", event => {
                     if (event.defaultPrevented || !event.clipboardData) return;
@@ -672,6 +678,9 @@ SOFTWARE.
 
                 function showView(viewToShow) {
                     workspace.dataset.view = viewToShow === logsView ? "logs" : viewToShow === settingsView ? "settings" : "manage";
+                    toolbarSlot.hidden = viewToShow === uiContainer;
+                    logsToolbar.hidden = viewToShow !== logsView;
+                    settingsToolbar.hidden = viewToShow !== settingsView;
                     if (viewToShow !== logsView) stopLogs();
                     if (viewToShow !== settingsView) stopSettings();
                     settingsView.style.display = "none";

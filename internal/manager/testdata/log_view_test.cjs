@@ -30,7 +30,10 @@ const settle = () => new Promise(resolve => setImmediate(resolve));
 async function harness(initialTask = {}, overrides = {}, hash = "") {
   const elements = Object.fromEntries([...html.matchAll(/id="([^"]+)"/g)].map(match => [match[1], new Element()]));
   elements.updateOverlay.hidden = true;
-  elements.logsView.append(elements.updateBtn, elements.updateOverlay);
+  elements.toolbarSlot.append(elements.logsToolbar, elements.settingsToolbar);
+  elements.logsToolbar.append(elements.logStatus, elements.updateBtn);
+  elements.settingsToolbar.append(elements.saveSettingsBtn);
+  elements.logsView.append(elements.updateOverlay);
   let ready;
   const streams = [];
   const requests = [];
@@ -319,20 +322,49 @@ test('successful save restores button state before starting one update', async (
  await e.logoutBtn.click(); await settle();
 });
 
-test('update controls belong to logs and a failed creation closes progress with a retryable result', async () => {
+test('settings save lives in the header slot only while settings is shown', async () => {
+ const settingsMarkup = html.split('id="settingsView"')[1].split('id="logsView"')[0];
+ const header = html.match(/<header[\s\S]*?<\/header>/)[0];
+ assert.match(header.split('id="settingsToolbar"')[1].split('id="logoutBtn"')[0], /id="saveSettingsBtn"/);
+ assert.doesNotMatch(settingsMarkup, /id="saveSettingsBtn"/);
+ assert.doesNotMatch(settingsMarkup, /settings-actions/);
+ const h = await harness();
+ const e = h.elements;
+ assert.equal(e.toolbarSlot.hidden, true);
+ await e.settingsBtn.click(); await settle();
+ assert.equal(e.toolbarSlot.hidden, false);
+ assert.equal(e.settingsToolbar.hidden, false);
+ assert.equal(e.logsToolbar.hidden, true);
+ assert.equal(visible(e.saveSettingsBtn), true);
+ await e.logsBtn.click(); await settle();
+ assert.equal(visible(e.saveSettingsBtn), false);
+ assert.equal(visible(e.updateBtn), true);
+ await e.logoutBtn.click(); await settle();
+});
+
+test('logs header slot owns update controls, logout stays last, and a failed creation stays retryable', async () => {
  const logsMarkup = html.split('id="logsView"')[1].split('</main>')[0];
- assert.match(logsMarkup, /id="updateBtn"/);
+ const header = html.match(/<header[\s\S]*?<\/header>/)[0];
+ const slot = header.split('id="toolbarSlot"')[1].split('id="logoutBtn"')[0];
+ assert.match(slot, /id="logStatus"/);
+ assert.match(slot, /id="updateBtn"/);
+ assert.ok(header.indexOf('id="toolbarSlot"') < header.indexOf('id="logoutBtn"'));
+ assert.doesNotMatch(logsMarkup, /id="updateBtn"/);
+ assert.doesNotMatch(logsMarkup, /<h1>/);
  assert.match(logsMarkup, /id="updateOverlay"/);
- assert.doesNotMatch(html.match(/<header[\s\S]*?<\/header>/)[0], /id="updateBtn"/);
  const h = await harness({}, { '/reload': async () => { throw new Error('连接不可用'); } });
  const e = h.elements;
+ assert.equal(e.toolbarSlot.hidden, true);
  await e.logsBtn.click(); await settle();
+ assert.equal(e.toolbarSlot.hidden, false);
+ assert.equal(visible(e.updateBtn), true);
  assert.equal(e.updateOverlay.hidden, true);
  await e.updateBtn.click(); await settle();
  assert.equal(e.updateOverlay.hidden, true);
  assert.match(notice(e, 'update-result').textContent, /无法创建更新任务.*连接不可用/);
  assert.equal(e.updateBtn.disabled, false);
  await e.manageBtn.click();
+ assert.equal(e.toolbarSlot.hidden, true);
  assert.equal(e.uiContainer.style.display, 'block');
  assert.ok(notice(e, 'update-result'));
  await e.logoutBtn.click();
