@@ -6,13 +6,21 @@
     if (!["http:", "https:"].includes(parent.protocol) || parent.hostname !== location.hostname) return;
 
     const protocol = "mihomo-panel-route-v1";
-    const pages = new Set(["overview", "proxies", "connections", "rules", "logs", "config", "traffic"]);
+    // Mirrors the route grammar in internal/manager/web/index.html. Panel paths
+    // are mirrored generically so upstream MetaCubeXD pages (control, profiles,
+    // profiles/:id/edit, ...) sync without a manager change.
+    const pagePattern = /^[A-Za-z0-9_~.%-]+(?:\/[A-Za-z0-9_~.%-]+)*$/;
     let router;
     let activeRequest = null;
 
+    function isPanelPage(page) {
+        return typeof page === "string" && page.length <= 256 && pagePattern.test(page) &&
+            !page.split("/").some(segment => segment === "." || segment === "..");
+    }
+
     function currentPage() {
         const page = router.currentRoute.value.path.slice(1);
-        return pages.has(page) ? page : null;
+        return isPanelPage(page) ? page : null;
     }
 
     function send(type, fields) {
@@ -27,7 +35,7 @@
             send("ready", { page: currentPage() });
             return;
         }
-        if (message.type !== "navigate" || !pages.has(message.page) ||
+        if (message.type !== "navigate" || !isPanelPage(message.page) ||
             !Number.isSafeInteger(message.id) || !currentPage()) return;
 
         activeRequest = message.id;
