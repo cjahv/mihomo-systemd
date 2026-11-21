@@ -130,7 +130,7 @@
             #logStatus[data-state="connected"] { color: var(--success); }
             #logStatus[data-state="error"] { color: var(--error); }
             #logOutput { flex: 1; min-height: 0; overflow: auto; overflow-anchor: none; overscroll-behavior: contain;
-                padding: 12px; border-top: 1px solid var(--border); background: var(--panel-soft); color: var(--text-strong);
+                padding: 12px; border: 1px solid var(--border); border-radius: var(--radius-panel); background: var(--panel-soft); color: var(--text-strong);
                 font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace; font-size: .8125rem; line-height: 1.65; tab-size: 4; }
             #logOutput:empty::after { content: "等待 Mihomo 日志…"; color: var(--text-muted); }
             .log-line { display: grid; grid-template-columns: 12ch 5ch minmax(24ch, 1fr); column-gap: 1ch; padding: 1px 0; }
@@ -544,7 +544,10 @@ SOFTWARE.
                 const panelOrigin = new URL(window.location.href);
                 panelOrigin.protocol = "http:";
                 panelOrigin.port = "9900";
-                const panelPages = new Set(["overview", "proxies", "connections", "rules", "logs", "config", "traffic"]);
+                const panelPagePattern = /^[A-Za-z0-9_~.%-]+(?:\/[A-Za-z0-9_~.%-]+)*$/;
+                // Same grammar as deploy/scripts/panel-route-bridge.js.
+                const isPanelPage = page => typeof page === "string" && page.length <= 256 && panelPagePattern.test(page) &&
+                    !page.split("/").some(segment => segment === "." || segment === "..");
                 const panelProtocol = "mihomo-panel-route-v1";
                 let route;
                 let lastPanelPage = null;
@@ -559,7 +562,7 @@ SOFTWARE.
                     if (hash === "#/settings") return { view: "settings", page: null };
                     if (hash === "#/logs") return { view: "logs", page: null };
                     const page = hash.startsWith("#/panel/") ? hash.slice("#/panel/".length) : null;
-                    return { view: "panel", page: panelPages.has(page) ? page : null };
+                    return { view: "panel", page: isPanelPage(page) ? page : null };
                 }
 
                 function routeHash({ view, page }) {
@@ -635,19 +638,24 @@ SOFTWARE.
                     if (signedOut || event.source !== uiFrame.contentWindow || event.origin !== panelOrigin.origin) return;
                     const message = event.data;
                     if (message?.protocol !== panelProtocol || !["ready", "page", "result"].includes(message.type) ||
-                        (message.page !== null && !panelPages.has(message.page))) return;
+                        (message.page !== null && !isPanelPage(message.page))) return;
 
                     if (message.type === "result") {
                         if (!pendingPanelRequest || message.id !== pendingPanelRequest.id) return;
                         pendingPanelRequest = null;
+                        // null means the panel landed on a route we cannot mirror; keep the last mirrored page.
+                        if (message.page === null) return;
                         panelPage = message.page;
                         if (route.view === "panel" && panelPage === route.page) clearPanelRequest();
                         return;
                     }
 
+                    // An unmirrored panel route must not clear the last mirrored page, or the next
+                    // mirrored page would look like a first report and yank the panel back to route.page.
+                    if (message.page === null) return;
                     const previousPage = panelPage;
                     panelPage = message.page;
-                    if (!panelPage || route.view !== "panel") return;
+                    if (route.view !== "panel") return;
                     if (message.type === "ready" || !previousPage || pendingPanelRequest) {
                         if (route.page) {
                             if (panelPage === route.page && !pendingPanelRequest) clearPanelRequest();

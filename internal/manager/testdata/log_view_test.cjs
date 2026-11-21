@@ -543,3 +543,35 @@ test('panel route synchronization accepts only the active iframe and tracks the 
   assert.equal(h.entries.at(-1), '#/panel/proxies');
   assert.equal(JSON.stringify(h.panelMessages).includes('example'), false);
 });
+
+test('panel route synchronization mirrors upstream panel pages instead of a fixed list', async () => {
+  const h = await harness({}, {}, '#/panel/overview');
+  const source = h.elements.uiFrame.contentWindow;
+  const report = (type, fields) => h.windowEvents.message({ origin: 'http://localhost:9900', source, data: { protocol: 'mihomo-panel-route-v1', type, ...fields } });
+  report('ready', { page: 'overview' });
+  report('page', { page: 'control' });
+  assert.equal(h.location.hash, '#/panel/control');
+  report('page', { page: 'profiles/abc/edit' });
+  assert.equal(h.location.hash, '#/panel/profiles/abc/edit');
+
+  // Unmirrored routes report null; they must neither rewrite the hash nor
+  // make the next mirrored page look like a first report.
+  report('page', { page: null });
+  assert.equal(h.location.hash, '#/panel/profiles/abc/edit');
+  report('page', { page: 'proxies' });
+  assert.equal(h.location.hash, '#/panel/proxies');
+  assert.equal(h.panelMessages.length, 0);
+
+  // Invalid page names are rejected at the message boundary.
+  report('page', { page: '../escape' });
+  report('page', { page: 'a/./b' });
+  assert.equal(h.location.hash, '#/panel/proxies');
+
+  // A manager-side route change to an upstream-only page is forwarded to the panel.
+  h.location.hash = '#/panel/control';
+  h.windowEvents.hashchange();
+  const request = h.panelMessages.at(-1).message;
+  assert.equal(request.page, 'control');
+  report('result', { id: request.id, page: 'control' });
+  assert.equal(h.location.hash, '#/panel/control');
+});
