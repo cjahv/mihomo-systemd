@@ -130,6 +130,9 @@ func runUpdateCommand(args []string) int {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
+		if lock.inherited {
+			u.readDeploymentValidation(*prepared)
+		}
 	}
 	if err = u.RecoverLocked(); err != nil {
 		if u.status.Message != err.Error() {

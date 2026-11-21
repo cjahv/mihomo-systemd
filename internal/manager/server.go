@@ -149,10 +149,11 @@ func (h *managerHandler) handleGetSettings(w http.ResponseWriter, r *http.Reques
 				}
 				parts := strings.SplitN(line, "=", 2)
 				key, value := parts[0], parts[1]
-				// 排除密钥，对应Python逻辑
-				if key != "MIHOMO_SECRET" {
-					settings[key] = value
+				switch strings.TrimSpace(strings.TrimPrefix(key, "export ")) {
+				case "MIHOMO_SECRET", "GITHUB_PROXY", "GITHUB_API_PROXY":
+					continue
 				}
+				settings[key] = value
 			}
 		}
 	}
@@ -227,8 +228,6 @@ func (h *managerHandler) handleSaveSettings(w http.ResponseWriter, r *http.Reque
 		"QUIC",
 		"LOCAL_LOOPBACK_PROXY",
 		"CONFIG_URL",
-		"GITHUB_PROXY",
-		"GITHUB_API_PROXY",
 		"MIHOMO_SECRET",
 	}
 	boolKeys := map[string]struct{}{

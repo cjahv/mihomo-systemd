@@ -142,13 +142,3 @@ http_download() (
     done
     return 1
 )
-
-# 代理前缀仅适用于公开的 GitHub URL；订阅不切换来源。
-github_download() {
-    local output="$1" budget="$2" max_bytes="$3" prefix="$4" url="$5"
-    if [ -n "$prefix" ]; then
-        http_download "$output" "$budget" "$max_bytes" "${prefix%/}/$url" "$url"
-    else
-        http_download "$output" "$budget" "$max_bytes" "$url"
-    fi
-}

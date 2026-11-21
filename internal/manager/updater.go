@@ -37,19 +37,16 @@ type updateStatus struct {
 
 // One private, atomically replaced document keeps config bytes and their identity together.
 type configSnapshot struct {
-	ID            string               `json:"id"`
-	Config        []byte               `json:"config"`
-	Raw           []byte               `json:"raw"`
-	CIDR          []byte               `json:"cidr,omitempty"`
-	CIDRPresent   bool                 `json:"cidr_present"`
-	CIDRTimestamp []byte               `json:"cidr_timestamp,omitempty"`
-	Hash          string               `json:"hash"`
-	EnvHash       string               `json:"env_hash"`
-	Selections    map[string]string    `json:"selections,omitempty"`
-	Verified      bool                 `json:"verified"`
-	Resources     map[string][]byte    `json:"resources,omitempty"`
-	ResourcesHash string               `json:"resources_hash,omitempty"`
-	ResourceTimes map[string]time.Time `json:"resource_times,omitempty"`
+	ID            string            `json:"id"`
+	Config        []byte            `json:"config"`
+	Raw           []byte            `json:"raw"`
+	CIDR          []byte            `json:"cidr,omitempty"`
+	CIDRPresent   bool              `json:"cidr_present"`
+	CIDRTimestamp []byte            `json:"cidr_timestamp,omitempty"`
+	Hash          string            `json:"hash"`
+	EnvHash       string            `json:"env_hash"`
+	Selections    map[string]string `json:"selections,omitempty"`
+	Verified      bool              `json:"verified"`
 }
 
 type updateTransaction struct {
@@ -68,7 +65,8 @@ type updateRuntime interface {
 	Prepare(context.Context, string) error
 	Render(context.Context, string, []byte) ([]byte, error)
 	Validate(context.Context, string) error
-	Resources(string) (map[string][]byte, error)
+	validateForDeployment(context.Context, string) (bool, error)
+	validationInputsHash() string
 	ActiveMatches(context.Context, string, string) bool
 	Selections(context.Context) map[string]string
 	Restart(context.Context) error
@@ -87,6 +85,7 @@ type configUpdater struct {
 	status       updateStatus
 	output       io.Writer
 	prepared     *configSnapshot
+	preflight    deploymentValidation
 	forceRestart bool
 	envFile      string
 }
@@ -163,13 +162,7 @@ func (u *configUpdater) snapshot(dir string) (configSnapshot, error) {
 		return s, err
 	}
 	s.EnvHash = digest(env)
-	s.Resources, err = u.runtime.Resources(filepath.Join(dir, "config.yaml"))
-	if err != nil {
-		return s, err
-	}
-	s.ResourcesHash = resourceHash(s.Resources)
-	s.ResourceTimes, err = providerResourceTimes(dir, s.Resources)
-	return s, err
+	return s, nil
 }
 
 func (u *configUpdater) knownGood() (configSnapshot, error) {
@@ -177,7 +170,7 @@ func (u *configUpdater) knownGood() (configSnapshot, error) {
 	if err := readJSON(u.path("confirmed.json"), &s); err != nil {
 		return s, err
 	}
-	if !s.Verified || len(s.Config) == 0 || s.Hash != digest(s.Config) || s.ResourcesHash != resourceHash(s.Resources) {
+	if !s.Verified || len(s.Config) == 0 || s.Hash != digest(s.Config) {
 		return s, errors.New("可用恢复点的完整性检查失败")
 	}
 	return s, nil
@@ -243,25 +236,26 @@ func (u *configUpdater) RunLocked(ctx context.Context, retry bool) (retErr error
 	if goodErr == nil && good.Hash == before.Hash {
 		appliedEnvHash = good.EnvHash
 	}
+	reusePreflight := u.prepared != nil && u.preflight.EnvHash == before.EnvHash &&
+		u.preflight.InputsHash != "" && u.preflight.InputsHash == u.runtime.validationInputsHash()
 	if baseline && currentMatches {
-		if err := writeProviderSnapshot(stage, before.Resources, before.ResourceTimes); err == nil {
-			if err := u.validateBytes(ctx, stage, before.Config); err == nil {
-				before.ID = u.status.ID + "-baseline"
-				before.Verified = true
-				// Reuse the original subscription only when its committed runtime bytes match.
-				if goodErr == nil && good.Hash == before.Hash {
-					before.Raw = good.Raw
-				}
-				confirmedBaseline := before
-				// Reachability verifies config bytes, not that current .env options
-				// have already been applied by scripts/entrypoint.sh.
-				confirmedBaseline.EnvHash = appliedEnvHash
-				if err := writeJSON(u.path("confirmed.json"), confirmedBaseline); err != nil {
-					return err
-				}
-				good = confirmedBaseline
-				goodErr = nil
+		baselineValidated := reusePreflight && u.preflight.BaselineHash == before.Hash
+		if baselineValidated || u.validateBytes(ctx, stage, before.Config) == nil {
+			before.ID = u.status.ID + "-baseline"
+			before.Verified = true
+			// Reuse the original subscription only when its committed runtime bytes match.
+			if goodErr == nil && good.Hash == before.Hash {
+				before.Raw = good.Raw
 			}
+			confirmedBaseline := before
+			// Reachability verifies config bytes, not that current .env options
+			// have already been applied by scripts/entrypoint.sh.
+			confirmedBaseline.EnvHash = appliedEnvHash
+			if err := writeJSON(u.path("confirmed.json"), confirmedBaseline); err != nil {
+				return err
+			}
+			good = confirmedBaseline
+			goodErr = nil
 		}
 	}
 	if baseline {
@@ -275,7 +269,7 @@ func (u *configUpdater) RunLocked(ctx context.Context, retry bool) (retErr error
 	var candidate configSnapshot
 	if u.prepared != nil {
 		candidate = *u.prepared
-		if candidate.Hash != digest(candidate.Config) || candidate.ResourcesHash != resourceHash(candidate.Resources) {
+		if candidate.Hash != digest(candidate.Config) {
 			return errors.New("预检候选快照完整性检查失败")
 		}
 		if err = u.materialize(stage, candidate); err != nil {
@@ -294,20 +288,15 @@ func (u *configUpdater) RunLocked(ctx context.Context, retry bool) (retErr error
 	if candidate.EnvHash != before.EnvHash {
 		return errors.New("准备期间 .env 已变化，请重新更新")
 	}
-	if err = u.runtime.Validate(ctx, filepath.Join(stage, "config.yaml")); err != nil {
-		return fmt.Errorf("候选配置校验失败: %w", err)
+	if !reusePreflight || u.preflight.CandidateHash != candidate.Hash {
+		if err = u.runtime.Validate(ctx, filepath.Join(stage, "config.yaml")); err != nil {
+			return fmt.Errorf("候选配置校验失败: %w", err)
+		}
 	}
 	candidate.ID = u.status.ID
 	candidate.Selections = before.Selections
 	u.status.CandidateHash = candidate.Hash
 	if !u.forceRestart && baseline && currentMatches && before.Hash == candidate.Hash && appliedEnvHash == candidate.EnvHash && equalAux(before, candidate) {
-		if err = refreshProviderTimes(u.dir, candidate.Resources, candidate.ResourceTimes); err != nil {
-			return err
-		}
-		candidate.ResourceTimes, err = providerResourceTimes(u.dir, candidate.Resources)
-		if err != nil {
-			return err
-		}
 		candidate.Verified = true
 		if err = writeJSON(u.path("confirmed.json"), candidate); err != nil {
 			return err
@@ -317,7 +306,7 @@ func (u *configUpdater) RunLocked(ctx context.Context, retry bool) (retErr error
 		}
 		return u.finish("unchanged", "配置未变化，当前配置可以访问 Google")
 	}
-	fingerprint := digest([]byte(candidate.Hash + candidate.EnvHash + digest(candidate.CIDR) + candidate.ResourcesHash))
+	fingerprint := digest([]byte(candidate.Hash + candidate.EnvHash + digest(candidate.CIDR)))
 	var failed failedCandidate
 	if !retry && readJSON(u.path("failed.json"), &failed) == nil && failed.Fingerprint == fingerprint && time.Since(failed.At) < failedCooldown {
 		return errors.New("同一候选配置近期验收失败，自动更新冷却 5 分钟；人工更新可立即重试")
@@ -333,24 +322,12 @@ func (u *configUpdater) RunLocked(ctx context.Context, retry bool) (retErr error
 			return err
 		}
 		defer os.RemoveAll(restoreDir)
-		if err := writeProviderSnapshot(restoreDir, rollback.Resources, rollback.ResourceTimes); err != nil {
-			return err
-		}
 		rendered, renderErr := u.runtime.Render(ctx, restoreDir, rollback.Raw)
 		if renderErr != nil {
 			return fmt.Errorf("准备恢复点失败: %w", renderErr)
 		}
 		if err = u.validateBytes(ctx, restoreDir, rendered); err != nil {
 			return fmt.Errorf("恢复点校验失败: %w", err)
-		}
-		rollback.Resources, err = u.runtime.Resources(filepath.Join(restoreDir, "config.yaml"))
-		if err != nil {
-			return err
-		}
-		rollback.ResourcesHash = resourceHash(rollback.Resources)
-		rollback.ResourceTimes, err = providerResourceTimes(restoreDir, rollback.Resources)
-		if err != nil {
-			return err
 		}
 		rollback.Config = rendered
 		rollback.Hash = digest(rendered)
@@ -375,9 +352,6 @@ func (u *configUpdater) RunLocked(ctx context.Context, retry bool) (retErr error
 	}
 	if err = u.report("applying", "正在加载候选配置"); err != nil {
 		return err
-	}
-	if len(candidate.Resources) > 0 || len(rollback.Resources) > 0 {
-		err = u.runtime.Stop(ctx)
 	}
 	if err == nil {
 		err = u.apply(candidate)
@@ -405,7 +379,7 @@ func (u *configUpdater) RunLocked(ctx context.Context, retry bool) (retErr error
 }
 
 func equalAux(a, b configSnapshot) bool {
-	return a.CIDRPresent == b.CIDRPresent && digest(a.CIDR) == digest(b.CIDR) && a.ResourcesHash == b.ResourcesHash
+	return a.CIDRPresent == b.CIDRPresent && digest(a.CIDR) == digest(b.CIDR)
 }
 
 func (u *configUpdater) loadAndProbe(ctx context.Context, selections map[string]string) error {
@@ -442,11 +416,6 @@ func (u *configUpdater) rollback(tx updateTransaction, reason string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 	_ = u.report("rolling_back", reason+"；正在恢复本地配置")
-	if len(tx.Rollback.Resources) > 0 || len(tx.Candidate.Resources) > 0 {
-		if err := u.runtime.Stop(ctx); err != nil {
-			return fmt.Errorf("%s\n停止核心以恢复 provider 失败: %w", reason, err)
-		}
-	}
 	if err := u.apply(tx.Rollback); err != nil {
 		return fmt.Errorf("%s\n恢复配置文件失败: %w", reason, err)
 	}
@@ -524,7 +493,7 @@ func (u *configUpdater) RecoverLocked() error {
 	if err != nil {
 		return fmt.Errorf("读取未完成事务失败: %w", err)
 	}
-	if tx.ID == "" || tx.Rollback.Hash != digest(tx.Rollback.Config) || tx.Candidate.Hash != digest(tx.Candidate.Config) || tx.Rollback.ResourcesHash != resourceHash(tx.Rollback.Resources) || tx.Candidate.ResourcesHash != resourceHash(tx.Candidate.Resources) {
+	if tx.ID == "" || tx.Rollback.Hash != digest(tx.Rollback.Config) || tx.Candidate.Hash != digest(tx.Candidate.Config) {
 		return errors.New("未完成事务完整性检查失败")
 	}
 	u.status = updateStatus{ID: tx.ID, Running: true}
@@ -551,23 +520,11 @@ func (u *configUpdater) RecoverLocked() error {
 		defer os.RemoveAll(stage)
 		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cancel()
-		if err := writeProviderSnapshot(stage, tx.Rollback.Resources, tx.Rollback.ResourceTimes); err != nil {
-			return err
-		}
 		rendered, err := u.runtime.Render(ctx, stage, tx.Rollback.Raw)
 		if err != nil {
 			return err
 		}
 		if err = u.validateBytes(ctx, stage, rendered); err != nil {
-			return err
-		}
-		tx.Rollback.Resources, err = u.runtime.Resources(filepath.Join(stage, "config.yaml"))
-		if err != nil {
-			return err
-		}
-		tx.Rollback.ResourcesHash = resourceHash(tx.Rollback.Resources)
-		tx.Rollback.ResourceTimes, err = providerResourceTimes(stage, tx.Rollback.Resources)
-		if err != nil {
 			return err
 		}
 		tx.Rollback.Config = rendered
@@ -582,11 +539,8 @@ func (u *configUpdater) RecoverLocked() error {
 }
 
 func (u *configUpdater) apply(s configSnapshot) error {
-	if s.Hash != digest(s.Config) || s.ResourcesHash != resourceHash(s.Resources) {
+	if s.Hash != digest(s.Config) {
 		return errors.New("配置快照 hash 不匹配")
-	}
-	if err := writeProviderSnapshot(u.dir, s.Resources, s.ResourceTimes); err != nil {
-		return err
 	}
 	files := []struct {
 		name    string
@@ -735,9 +689,6 @@ func (u *configUpdater) environmentPath() string {
 	return filepath.Join(u.dir, ".env")
 }
 func (u *configUpdater) materialize(dir string, s configSnapshot) error {
-	if err := writeProviderSnapshot(dir, s.Resources, s.ResourceTimes); err != nil {
-		return err
-	}
 	for name, data := range map[string][]byte{"config.yaml": s.Config, "subscription.yaml": s.Raw, "cn_cidr.txt": s.CIDR} {
 		if len(data) > 0 {
 			if err := atomicWrite(filepath.Join(dir, name), data, 0600); err != nil {
@@ -767,6 +718,8 @@ func (u *configUpdater) prepareDeployment(ctx context.Context, dir string) error
 	if err = writeJSON(filepath.Join(dir, "before.json"), before); err != nil {
 		return err
 	}
+	inputsHash := u.runtime.validationInputsHash()
+	var baselineHash string
 	if len(before.Config) > 0 {
 		oldDir := filepath.Join(dir, "baseline")
 		if err = os.Mkdir(oldDir, 0700); err != nil {
@@ -775,8 +728,12 @@ func (u *configUpdater) prepareDeployment(ctx context.Context, dir string) error
 		if err = u.materialize(oldDir, before); err != nil {
 			return err
 		}
-		if err = u.runtime.Validate(ctx, filepath.Join(oldDir, "config.yaml")); err != nil {
+		reusable, err := u.runtime.validateForDeployment(ctx, filepath.Join(oldDir, "config.yaml"))
+		if err != nil {
 			return fmt.Errorf("新核心无法校验现有恢复配置: %w", err)
+		}
+		if reusable {
+			baselineHash = before.Hash
 		}
 	}
 	if err = u.runtime.Prepare(ctx, dir); err != nil {
@@ -786,13 +743,29 @@ func (u *configUpdater) prepareDeployment(ctx context.Context, dir string) error
 	if err != nil {
 		return err
 	}
-	if err = u.runtime.Validate(ctx, filepath.Join(dir, "config.yaml")); err != nil {
+	candidatePath := filepath.Join(dir, "config.yaml")
+	candidateReusable, err := u.runtime.validateForDeployment(ctx, candidatePath)
+	if err != nil {
 		return err
 	}
 	if err = u.checkDeploymentSource(before); err != nil {
 		return err
 	}
-	return writeJSON(filepath.Join(dir, "candidate.json"), candidate)
+	if err = writeJSON(filepath.Join(dir, "candidate.json"), candidate); err != nil {
+		return err
+	}
+	var candidateHash string
+	if candidateReusable && candidate.Hash == validationFileHash(candidatePath) {
+		candidateHash = candidate.Hash
+	}
+	if before.EnvHash != candidate.EnvHash || (baselineHash == "" && candidateHash == "") ||
+		inputsHash == "" || inputsHash != u.runtime.validationInputsHash() {
+		return nil
+	}
+	return writeJSON(filepath.Join(dir, deploymentValidationFile), deploymentValidation{
+		BaselineHash: baselineHash, CandidateHash: candidateHash,
+		EnvHash: candidate.EnvHash, InputsHash: inputsHash,
+	})
 }
 
 func (u *configUpdater) checkDeploymentSource(before configSnapshot) error {

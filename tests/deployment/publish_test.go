@@ -40,7 +40,7 @@ func TestPublishDeployment(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			for _, name := range []string{"scripts/publish.sh", "deploy/lib/env.sh", "deploy/lib/target.sh", "deploy/lib/http.sh", "deploy/lib/release.sh", "deploy/release.sh", "deploy/systemd/mihomo.service.in", "deploy/systemd/mihomo-manager.service.in"} {
+			for _, name := range []string{"scripts/publish.sh", "deploy/lib/env.sh", "deploy/lib/target.sh", "deploy/lib/http.sh", "deploy/lib/release.sh", "deploy/release.sh", "deploy/scripts/panel-route-bridge.js", "deploy/systemd/mihomo.service.in", "deploy/systemd/mihomo-manager.service.in"} {
 				copyDeploymentFile(t, dir, name)
 			}
 			releasePath := filepath.Join(dir, "deploy", "release.sh")
@@ -55,6 +55,9 @@ func TestPublishDeployment(t *testing.T) {
 				writeDeploymentFixture(t, filepath.Join(remote, ".env"), "remote-fixture\n")
 			}
 			writeDeploymentFixture(t, filepath.Join(remote, "config.yaml"), "old-config")
+			if scenario == "install-failure" {
+				writeDeploymentFixture(t, filepath.Join(remote, "ui", "index.html"), "old-panel")
+			}
 			writeDeploymentFixture(t, filepath.Join(remote, "scripts", "entrypoint.sh"), "old-runtime")
 			writeDeploymentFixture(t, filepath.Join(dir, "deploy", "scripts", "entrypoint.sh"), "new-runtime")
 			writeDeploymentFixture(t, filepath.Join(dir, "deploy", "scripts", "update.sh"), "new-update")
@@ -69,6 +72,10 @@ case "$1" in
   mkdir .release
   printf '#!/bin/bash\necho core\n' > .release/mihomo
   chmod +x .release/mihomo
+  if [ "$TEST_CASE" = install-failure ]; then
+    mkdir .release/ui
+    printf new-panel > .release/ui/index.html
+  fi
   if [ "$TEST_CASE" = terminal ]; then
     echo "remote-terminal=$MIHOMO_DOWNLOAD_TERMINAL" >> "$TEST_LOG"
     source ./lib/http.sh
@@ -79,6 +86,11 @@ case "$1" in
   cp "$2" "$TEST_INSTALLED/mihomo-manager"
   cp "$MIHOMO_PREPARED_DIR/mihomo" "$TEST_INSTALLED/mihomo"
   for unit in mihomo mihomo-manager; do printf new-unit > "$TEST_UNITS/$unit.service"; done
+  if [ "$TEST_CASE" = install-failure ]; then
+    touch "$MIHOMO_PREPARED_DIR/ui-installed"
+    mv ui "$MIHOMO_PREPARED_DIR/previous-ui"
+    mv "$MIHOMO_PREPARED_DIR/ui" ui
+  fi
   [[ "$TEST_CASE" != *install-failure ]] || exit 1 ;;
 esac
 `)
@@ -356,6 +368,12 @@ printf old-config > "$TEST_REMOTE/config.yaml"
 				old, _ := os.ReadFile(filepath.Join(remote, "scripts", "entrypoint.sh"))
 				if string(old) != "old-runtime" {
 					t.Fatal("runtime not restored")
+				}
+				if scenario == "install-failure" {
+					panel, err := os.ReadFile(filepath.Join(remote, "ui", "index.html"))
+					if err != nil || string(panel) != "old-panel" {
+						t.Fatalf("panel not restored: %s %v", panel, err)
+					}
 				}
 				if scenario == "active-update-failure" {
 					for _, service := range []string{"mihomo", "mihomo-manager"} {

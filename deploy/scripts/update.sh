@@ -80,17 +80,6 @@ log_warn() {
     echo -e "${YELLOW}[WARN]$(date '+[%Y-%m-%d %H:%M:%S]')${NC} $1"
 }
 
-# 特殊处理GITHUB_PROXY和GITHUB_API_PROXY，确保末尾有斜杠
-if [ -n "$GITHUB_PROXY" ] && [[ "$GITHUB_PROXY" != */ ]]; then
-    GITHUB_PROXY="${GITHUB_PROXY}/"
-    log_info "已为GITHUB_PROXY添加末尾斜杠"
-fi
-
-if [ -n "$GITHUB_API_PROXY" ] && [[ "$GITHUB_API_PROXY" != */ ]]; then
-    GITHUB_API_PROXY="${GITHUB_API_PROXY}/"
-    log_info "已为GITHUB_API_PROXY添加末尾斜杠"
-fi
-
 # 错误处理函数
 handle_error() {
     log_error "$1"
