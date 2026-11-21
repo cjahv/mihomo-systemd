@@ -39,10 +39,7 @@ func (r *linuxRuntime) script(ctx context.Context, args ...string) error {
 	return runDiagnosticCommand(ctx, operation, cmd, r.output)
 }
 func (r *linuxRuntime) Prepare(ctx context.Context, dir string) error {
-	if err := r.script(ctx, "--prepare", dir); err != nil {
-		return err
-	}
-	return r.stageProviders(ctx, dir, true)
+	return r.script(ctx, "--prepare", dir)
 }
 func (r *linuxRuntime) Render(ctx context.Context, dir string, raw []byte) ([]byte, error) {
 	source := filepath.Join(dir, "rollback-source.yaml")
@@ -50,9 +47,6 @@ func (r *linuxRuntime) Render(ctx context.Context, dir string, raw []byte) ([]by
 		return nil, err
 	}
 	if err := r.script(ctx, "--render", dir, source); err != nil {
-		return nil, err
-	}
-	if err := r.stageProviders(ctx, dir, false); err != nil {
 		return nil, err
 	}
 	return readOptional(filepath.Join(dir, "config.yaml"))
@@ -82,37 +76,12 @@ func (r *linuxRuntime) Validate(ctx context.Context, path string) error {
 	if err != nil {
 		return err
 	}
-	items, err := providers(cfg)
-	if err != nil {
+	if _, err = providers(cfg); err != nil {
 		return err
 	}
-	// Validation references only the prepared resource files. It never points at
-	// a live HTTP provider cache, while geodata remains under the configured home.
-	for _, p := range items {
-		name, err := providerPath(r.dir, p.path)
-		if err != nil {
-			return err
-		}
-		prepared := filepath.Join(filepath.Dir(path), name)
-		data, err := readProvider(filepath.Dir(path), name)
-		if err != nil {
-			return fmt.Errorf("%s[%s] 的候选依赖 %s 无法读取: %w", p.kind, p.name, prepared, err)
-		}
-		if len(data) == 0 {
-			return fmt.Errorf("%s[%s] 的候选依赖 %s 为空", p.kind, p.name, prepared)
-		}
-		p.options["type"], p.options["path"] = "file", prepared
-	}
-	validation := path + ".validation.json"
-	b, err := json.Marshal(cfg)
-	if err != nil {
-		return err
-	}
-	if err = atomicWrite(validation, b, 0600); err != nil {
-		return err
-	}
-	defer os.Remove(validation)
-	cmd := exec.CommandContext(ctx, r.kernelPath(), "-t", "-d", r.dir, "-f", validation)
+	// The kernel checks the candidate exactly as it will be loaded. It does not fetch
+	// providers during -t, so validation never depends on network access.
+	cmd := exec.CommandContext(ctx, r.kernelPath(), "-t", "-d", r.dir, "-f", path)
 	return runDiagnosticCommand(ctx, "Mihomo 原生配置校验", cmd, r.output)
 }
 

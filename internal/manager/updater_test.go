@@ -15,24 +15,22 @@ import (
 )
 
 type fakeRuntime struct {
-	dir               string
-	probeErrors       []error
-	probes            int
-	restarts          int
-	stops             int
-	readyErrors       []error
-	prepareError      error
-	validateError     error
-	renderError       error
-	restartErrors     []error
-	matches           bool
-	resourceNames     []string
-	resourceCandidate map[string][]byte
-	candidate         []byte
-	newCIDR           []byte
-	prepareGate       chan struct{}
-	readyDeadline     time.Duration
-	probeDeadline     time.Duration
+	dir           string
+	probeErrors   []error
+	probes        int
+	restarts      int
+	stops         int
+	readyErrors   []error
+	prepareError  error
+	validateError error
+	renderError   error
+	restartErrors []error
+	matches       bool
+	candidate     []byte
+	newCIDR       []byte
+	prepareGate   chan struct{}
+	readyDeadline time.Duration
+	probeDeadline time.Duration
 }
 
 func (f *fakeRuntime) Prepare(ctx context.Context, dir string) error {
@@ -52,9 +50,6 @@ func (f *fakeRuntime) Prepare(ctx context.Context, dir string) error {
 	if err := atomicWrite(filepath.Join(dir, "subscription.yaml"), f.candidate, 0600); err != nil {
 		return err
 	}
-	if err := writeProviders(dir, f.resourceCandidate); err != nil {
-		return err
-	}
 	return atomicWrite(filepath.Join(dir, "cn_cidr.txt"), f.newCIDR, 0600)
 }
 func (f *fakeRuntime) Render(_ context.Context, _ string, b []byte) ([]byte, error) {
@@ -66,19 +61,6 @@ func (f *fakeRuntime) Validate(_ context.Context, path string) error {
 		return f.validateError
 	}
 	return nil
-}
-func (f *fakeRuntime) Resources(path string) (map[string][]byte, error) {
-	files := make(map[string][]byte)
-	for _, name := range f.resourceNames {
-		b, err := readOptional(filepath.Join(filepath.Dir(path), name))
-		if err != nil {
-			return nil, err
-		}
-		if len(b) > 0 {
-			files[name] = b
-		}
-	}
-	return files, nil
 }
 func (f *fakeRuntime) ActiveMatches(context.Context, string, string) bool { return f.matches }
 func (f *fakeRuntime) Selections(context.Context) map[string]string {

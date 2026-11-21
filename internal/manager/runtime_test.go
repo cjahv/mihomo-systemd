@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-func TestNativeValidationRejectsMissingProviderFilesAndMalformedConfig(t *testing.T) {
+func TestNativeValidationRejectsMalformedProvidersAndConfig(t *testing.T) {
 	dir := t.TempDir()
 	// These commands model process boundaries; real kernel acceptance is separate.
 	yq := `#!/bin/sh
@@ -40,7 +40,8 @@ exit 0
 	if _, e := os.Stat(marker); !os.IsNotExist(e) {
 		t.Fatal("unsupported configs reached native validation")
 	}
-	if e := os.WriteFile(path, []byte(`{"mixed-port":7890,"proxy-providers":{}}`), 0600); e != nil {
+	// Providers are not downloaded before validation; the kernel alone decides whether they load.
+	if e := os.WriteFile(path, []byte(`{"mixed-port":7890,"rule-providers":{"remote":{"type":"http","url":"https://example.invalid/r.yaml","path":"./ruleset/r.yaml"}}}`), 0600); e != nil {
 		t.Fatal(e)
 	}
 	if e := runtime.Validate(context.Background(), path); e != nil {
@@ -84,8 +85,17 @@ func TestRunningConfigMustMatchBeforeBaselinePromotion(t *testing.T) {
 }
 
 func TestNativeAndYAMLValidationPreserveCommandDiagnostics(t *testing.T) {
-	r := providerFixture(t)
+	root := t.TempDir()
+	bin := filepath.Join(root, "bin")
+	if err := os.Mkdir(bin, 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	r := &linuxRuntime{dir: root, kernel: filepath.Join(bin, "mihomo")}
 	path := filepath.Join(r.dir, "config.yaml")
+	if err := os.WriteFile(filepath.Join(bin, "yq"), []byte("#!/bin/bash\ncat \"$3\"\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(path, []byte(`{"rules":["MATCH,DIRECT"]}`), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +106,7 @@ func TestNativeAndYAMLValidationPreserveCommandDiagnostics(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "MissingGroup") || !strings.Contains(err.Error(), "line 12") {
 		t.Fatalf("native details lost: %v", err)
 	}
-	yq := filepath.Join(r.dir, "bin", "yq")
+	yq := filepath.Join(bin, "yq")
 	if err := os.WriteFile(yq, []byte("#!/bin/bash\necho 'yaml: line 4: did not find expected key' >&2\nexit 1\n"), 0700); err != nil {
 		t.Fatal(err)
 	}
