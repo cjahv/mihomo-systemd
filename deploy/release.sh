@@ -18,7 +18,7 @@ phase=preparing
 mutating=false
 recovery_failed=false
 previous_stage=""
-runtime_files=(install.sh release.sh scripts/update.sh scripts/entrypoint.sh lib/target.sh lib/env.sh lib/http.sh lib/release.sh systemd/mihomo.service.in systemd/mihomo-manager.service.in)
+runtime_files=(install.sh release.sh scripts/update.sh scripts/entrypoint.sh scripts/panel-route-bridge.js lib/target.sh lib/env.sh lib/http.sh lib/release.sh systemd/mihomo.service.in systemd/mihomo-manager.service.in)
 state_files=(.env .config_hash .env_hash .cidr_hash .update-state/confirmed.json .update-state/transaction.json .update-state/status.json .update-state/failed.json)
 
 # Never truncate the previous recovery record: the new package and its backup

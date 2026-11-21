@@ -302,7 +302,7 @@ SOFTWARE.
                         </aside>
                     </div>
                 </main>
-                <div class="bottom-area" id="uiContainer"><iframe id="uiFrame" title="MetaCubeXD 管理面板" src=""></iframe></div>
+                <div class="bottom-area" id="uiContainer"><iframe id="uiFrame" title="MetaCubeXD 管理面板" referrerpolicy="origin"></iframe></div>
             </div>
         </div>
         <script>
@@ -535,9 +535,127 @@ SOFTWARE.
                     event.preventDefault();
                 });
 
-                // 设置iframe的src为动态获取的IP地址
-                const currentIp = window.location.hostname;
-                uiFrame.src = `http://${currentIp}:9900/ui#/setup?hostname=${currentIp}&port=9900&secret=${encodeURIComponent(localStorage.getItem("mihomo_secret"))}`;
+                const panelOrigin = new URL(window.location.href);
+                panelOrigin.protocol = "http:";
+                panelOrigin.port = "9900";
+                const panelPages = new Set(["overview", "proxies", "connections", "rules", "logs", "config", "traffic"]);
+                const panelProtocol = "mihomo-panel-route-v1";
+                let route;
+                let lastPanelPage = null;
+                let panelPage = null;
+                let panelStarted = false;
+                let requestID = 0;
+                let pendingPanelRequest = null;
+                let panelTimer;
+
+                function parseRoute() {
+                    const hash = window.location.hash;
+                    if (hash === "#/settings") return { view: "settings", page: null };
+                    if (hash === "#/logs") return { view: "logs", page: null };
+                    const page = hash.startsWith("#/panel/") ? hash.slice("#/panel/".length) : null;
+                    return { view: "panel", page: panelPages.has(page) ? page : null };
+                }
+
+                function routeHash({ view, page }) {
+                    return "#/" + view + (page ? "/" + page : "");
+                }
+
+                function panelMessage(type, fields = {}) {
+                    uiFrame.contentWindow.postMessage({ protocol: panelProtocol, type, ...fields }, panelOrigin.origin);
+                }
+
+                function clearPanelRequest() {
+                    clearTimeout(panelTimer);
+                    notifications.dismiss("panel-route");
+                }
+
+                function syncPanelRoute() {
+                    if (route.view !== "panel" || !route.page || !panelPage ||
+                        pendingPanelRequest?.page === route.page ||
+                        (!pendingPanelRequest && panelPage === route.page)) return;
+                    pendingPanelRequest = { id: ++requestID, page: route.page };
+                    panelMessage("navigate", pendingPanelRequest);
+                }
+
+                function applyRoute() {
+                    if (signedOut) return;
+                    const next = parseRoute();
+                    const hash = routeHash(next);
+                    if (window.location.hash !== hash) history.replaceState(null, "", hash);
+                    if (route && routeHash(route) === hash) return;
+
+                    const switchedView = route?.view !== next.view;
+                    route = next;
+                    clearPanelRequest();
+                    if (switchedView) {
+                        const [view, button] = next.view === "settings" ? [settingsView, settingsBtn]
+                            : next.view === "logs" ? [logsView, logsBtn] : [uiContainer, manageBtn];
+                        showView(view);
+                        setActiveButton(button);
+                        if (next.view === "settings") void fetchSettings();
+                        if (next.view === "logs") void restoreUpdate();
+                    }
+                    if (next.view !== "panel") return;
+                    if (next.page) {
+                        lastPanelPage = next.page;
+                        if (panelPage !== next.page || pendingPanelRequest) {
+                            panelTimer = setTimeout(() => {
+                                notifications.show({ id: "panel-route", tone: "error", title: "未能打开指定面板页面" });
+                            }, 10000);
+                        }
+                        syncPanelRoute();
+                    }
+                    if (!panelStarted) {
+                        panelStarted = true;
+                        const setup = new URLSearchParams({
+                            hostname: panelOrigin.hostname,
+                            port: panelOrigin.port,
+                            secret: localStorage.getItem("mihomo_secret") || "",
+                        });
+                        uiFrame.contentWindow.location.replace(new URL("/ui/#/setup?" + setup, panelOrigin.origin));
+                    }
+                }
+
+                function navigate(view, page = null, replace = false) {
+                    const hash = routeHash({ view, page });
+                    if (window.location.hash !== hash) {
+                        if (replace) history.replaceState(null, "", hash);
+                        else history.pushState(null, "", hash);
+                    }
+                    applyRoute();
+                }
+
+                window.addEventListener("message", event => {
+                    if (signedOut || event.source !== uiFrame.contentWindow || event.origin !== panelOrigin.origin) return;
+                    const message = event.data;
+                    if (message?.protocol !== panelProtocol || !["ready", "page", "result"].includes(message.type) ||
+                        (message.page !== null && !panelPages.has(message.page))) return;
+
+                    if (message.type === "result") {
+                        if (!pendingPanelRequest || message.id !== pendingPanelRequest.id) return;
+                        pendingPanelRequest = null;
+                        panelPage = message.page;
+                        if (route.view === "panel" && panelPage === route.page) clearPanelRequest();
+                        return;
+                    }
+
+                    const previousPage = panelPage;
+                    panelPage = message.page;
+                    if (!panelPage || route.view !== "panel") return;
+                    if (message.type === "ready" || !previousPage || pendingPanelRequest) {
+                        if (route.page) {
+                            if (panelPage === route.page && !pendingPanelRequest) clearPanelRequest();
+                            else syncPanelRoute();
+                        } else {
+                            navigate("panel", panelPage, true);
+                        }
+                    } else if (panelPage !== previousPage) {
+                        navigate("panel", panelPage);
+                    }
+                });
+                uiFrame.addEventListener("load", () => panelMessage("hello"));
+                window.addEventListener("popstate", applyRoute);
+                window.addEventListener("hashchange", applyRoute);
 
                 const navButtons = [manageBtn, settingsBtn, logsBtn];
 
@@ -571,17 +689,10 @@ SOFTWARE.
                     if (viewToShow === logsView) void connectLogs();
                 }
 
-                manageBtn.addEventListener("click", () => {
-                    showView(uiContainer);
-                    setActiveButton(manageBtn);
-                });
-
+                manageBtn.addEventListener("click", () => navigate("panel", lastPanelPage));
                 settingsBtn.addEventListener("click", () => {
-                    showView(settingsView);
-                    setActiveButton(settingsBtn);
-
-                    // 获取当前配置
-                    fetchSettings();
+                    if (route.view === "settings") void fetchSettings();
+                    else navigate("settings");
                 });
 
                 // 获取配置项并填充表单
@@ -848,8 +959,7 @@ SOFTWARE.
                     if (updateController || activeUpdate || creatingUpdate || signedOut) return;
                     creatingUpdate = true;
                     syncUpdateButtons();
-                    showView(logsView);
-                    setActiveButton(logsBtn);
+                    navigate("logs");
                     updateOverlay.hidden = false;
                     notifications.dismiss("update-result");
                     notifications.dismiss("update-connection");
@@ -881,13 +991,14 @@ SOFTWARE.
                 });
 
                 logsBtn.addEventListener("click", () => {
-                    showView(logsView);
-                    setActiveButton(logsBtn);
+                    if (route.view !== "logs") {
+                        navigate("logs");
+                        return;
+                    }
+                    void connectLogs();
                     void restoreUpdate();
                 });
 
-                showView(uiContainer);
-                setActiveButton(manageBtn);
                 // Restore task observation without changing the user's selected view.
                 async function restoreUpdate() {
                     try {
@@ -899,7 +1010,8 @@ SOFTWARE.
                         if (task.running) void watchUpdate();
                     } catch (_) { /* The next refresh or update reconnects. */ }
                 }
-                void restoreUpdate();
+                applyRoute();
+                if (route.view !== "logs") void restoreUpdate();
                 window.addEventListener("pagehide", () => { stopLogs(); stopUpdates(); stopSettings(); });
                 window.addEventListener("pageshow", event => {
                     if (event.persisted && !signedOut) {
@@ -948,6 +1060,7 @@ SOFTWARE.
                 if (logoutBtn) {
                     logoutBtn.addEventListener("click", () => {
                         signedOut = true;
+                        clearPanelRequest();
                         stopLogs();
                         stopUpdates();
                         stopSettings();

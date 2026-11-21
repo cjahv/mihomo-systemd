@@ -27,7 +27,7 @@ class Element {
   get innerHTML() { return this.rawHTML || escape(this.raw || '') + this.children.map(node => node.tag === '#text' ? escape(node.textContent) : `<${node.tag}>${node.innerHTML}</${node.tag}>`).join(''); }
 }
 const settle = () => new Promise(resolve => setImmediate(resolve));
-async function harness(initialTask = {}, overrides = {}) {
+async function harness(initialTask = {}, overrides = {}, hash = "") {
   const elements = Object.fromEntries([...html.matchAll(/id="([^"]+)"/g)].map(match => [match[1], new Element()]));
   elements.updateOverlay.hidden = true;
   elements.logsView.append(elements.updateBtn, elements.updateOverlay);
@@ -53,7 +53,19 @@ async function harness(initialTask = {}, overrides = {}) {
   const windowEvents = {};
   const documentEvents = {};
   let selection = null;
-  const window = { location: { hostname: 'localhost' }, getSelection: () => selection, addEventListener(name, callback) { windowEvents[name] = callback; } };
+  const location = new URL('http://localhost:8000/' + hash);
+  location.reload = () => {};
+  const entries = [location.hash];
+  const history = {
+    replaceState(_state, _title, next) { location.hash = next; entries[entries.length - 1] = next; },
+    pushState(_state, _title, next) { location.hash = next; entries.push(next); },
+  };
+  const panelMessages = [];
+  elements.uiFrame.contentWindow = {
+    location: { replace(url) { this.href = String(url); } },
+    postMessage(message, origin) { panelMessages.push({ message, origin }); },
+  };
+  const window = { location, getSelection: () => selection, addEventListener(name, callback) { windowEvents[name] = callback; } };
   let clockTime = Date.now();
   const timers = new Map();
   class ClockDate extends Date { static now() { return clockTime; } }
@@ -66,10 +78,10 @@ async function harness(initialTask = {}, overrides = {}) {
     clockTime += duration;
     for (const [id, timer] of [...timers]) if (timer.expires <= clockTime) { timers.delete(id); timer.callback(); }
   };
-  const context = vm.createContext({ document: { getElementById: id => elements[id], createElement: tag => new Element(tag), createDocumentFragment: () => new Element('fragment'), createTextNode: text => { const node = new Element('#text'); node.textContent = text; return node; }, addEventListener(name, cb) { if (name === 'DOMContentLoaded') ready = cb; else documentEvents[name] = cb; } }, window, location: { reload() {} }, localStorage: { getItem: () => 'example', setItem() {}, removeItem() {} }, fetch, TextDecoder, AbortController, DOMException, console, Date: ClockDate, setTimeout: setTimer, clearTimeout: clearTimer, Node: { TEXT_NODE: 3 }, NodeFilter: { SHOW_TEXT: 4 } });
+  const context = vm.createContext({ document: { getElementById: id => elements[id], createElement: tag => new Element(tag), createDocumentFragment: () => new Element('fragment'), createTextNode: text => { const node = new Element('#text'); node.textContent = text; return node; }, addEventListener(name, cb) { if (name === 'DOMContentLoaded') ready = cb; else documentEvents[name] = cb; } }, window, location, history, URL, URLSearchParams, localStorage: { getItem: () => 'example', setItem() {}, removeItem() {} }, fetch, TextDecoder, AbortController, DOMException, console, Date: ClockDate, setTimeout: setTimer, clearTimeout: clearTimer, Node: { TEXT_NODE: 3 }, NodeFilter: { SHOW_TEXT: 4 } });
   vm.runInContext(source, context);
   await ready(); await settle();
-  return { elements, streams, requests, context, advance, windowEvents, documentEvents, setSelection(value) { selection = value; }, notices: vm.runInContext('notifications', context), setTask(value) { task = value; } };
+  return { elements, streams, requests, context, advance, windowEvents, documentEvents, location, entries, panelMessages, setSelection(value) { selection = value; }, notices: vm.runInContext('notifications', context), setTask(value) { task = value; } };
 }
 const messageOf = row => row.children[2].textContent;
 const notice = (elements, id) => elements.notifications.children.find(card => card.dataset.notice === id);
@@ -454,4 +466,48 @@ test('loss of update observation keeps the task active; reconnecting observes co
  assert.equal(e.updateOverlay.hidden, true);
  assert.match(notice(e, 'update-result').textContent, /回滚成功/);
  await e.logoutBtn.click();
+});
+
+test('manager deep links restore the view and browser history tears down live logs', async () => {
+  const h = await harness({}, {}, '#/logs');
+  assert.equal(h.elements.logsBtn.attributes['aria-pressed'], 'true');
+  assert.equal(h.streams.length, 1);
+  assert.equal(h.elements.uiFrame.contentWindow.location.href, undefined);
+  await h.elements.settingsBtn.click();
+  assert.deepEqual(h.entries, ['#/logs', '#/settings']);
+  assert.equal(h.streams[0].signal.aborted, true);
+  h.location.hash = '#/logs';
+  h.windowEvents.popstate();
+  h.windowEvents.hashchange();
+  assert.equal(h.streams.length, 2);
+  assert.equal(h.requests.includes('/reload'), false);
+  h.windowEvents.pagehide();
+});
+
+test('panel route synchronization accepts only the active iframe and tracks the latest target', async () => {
+  const h = await harness({}, {}, '#/panel/connections');
+  const source = h.elements.uiFrame.contentWindow;
+  const report = (type, fields, origin = 'http://localhost:9900', sender = source) => {
+    h.windowEvents.message({ origin, source: sender, data: { protocol: 'mihomo-panel-route-v1', type, ...fields } });
+  };
+  report('ready', { page: 'overview' }, 'http://localhost:9999');
+  report('ready', { page: 'overview' }, 'http://localhost:9900', {});
+  assert.equal(h.panelMessages.length, 0);
+  report('ready', { page: null });
+  report('page', { page: 'overview' });
+  const first = h.panelMessages.at(-1).message;
+  assert.equal(first.page, 'connections');
+
+  h.location.hash = '#/panel/overview';
+  h.windowEvents.hashchange();
+  const second = h.panelMessages.at(-1).message;
+  assert.equal(second.page, 'overview');
+  assert.ok(second.id > first.id);
+  report('result', { id: first.id, page: 'connections' });
+  report('result', { id: second.id, page: 'overview' });
+  assert.equal(h.location.hash, '#/panel/overview');
+  report('page', { page: 'proxies' });
+  assert.equal(h.location.hash, '#/panel/proxies');
+  assert.equal(h.entries.at(-1), '#/panel/proxies');
+  assert.equal(JSON.stringify(h.panelMessages).includes('example'), false);
 });
