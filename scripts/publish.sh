@@ -23,10 +23,20 @@ log_error() {
 }
 
 usage() {
-    printf '用法: mise run publish -- [--build-only | --force]\n'
+    printf '用法: mise run publish -- [host] [--build-only | --force]\n'
+    printf '  host          本次发布的远端主机，覆盖 .env 中的 REMOTE_HOST（不写入 .env）\n'
     printf '  --build-only  仅探测目标并在本地构建\n'
     printf '  --force       保留旧恢复包，跳过未完成发布的自动恢复并重新安装\n'
 }
+
+# 与 .env 中 REMOTE_HOST 的校验规则保持一致。
+host_pattern='^[a-zA-Z0-9][a-zA-Z0-9.:-]*$'
+HOST_OVERRIDE=""
+if [ "$#" -gt 0 ] && [[ "$1" != -* ]]; then
+    HOST_OVERRIDE="$1"
+    [[ "$HOST_OVERRIDE" =~ $host_pattern ]] || { log_error "远端主机参数无效: $HOST_OVERRIDE"; exit 1; }
+    shift
+fi
 
 BUILD_ONLY=false
 FORCE_INSTALL=false
@@ -52,8 +62,9 @@ quote_shell() {
 }
 
 load_env_file .env || handle_error "未找到 .env，请根据 .env.template 创建"
+if [ -n "$HOST_OVERRIDE" ]; then REMOTE_HOST="$HOST_OVERRIDE"; fi
 [[ "${REMOTE_USER:-}" =~ ^[a-zA-Z0-9_][a-zA-Z0-9_.-]*$ ]] || handle_error "REMOTE_USER 无效"
-[[ "${REMOTE_HOST:-}" =~ ^[a-zA-Z0-9][a-zA-Z0-9.:-]*$ ]] || handle_error "REMOTE_HOST 无效"
+[[ "${REMOTE_HOST:-}" =~ $host_pattern ]] || handle_error "REMOTE_HOST 无效"
 [[ "${REMOTE_DIR:-}" == /* && "$REMOTE_DIR" != / && "$REMOTE_DIR" != *$'\n'* ]] || handle_error "REMOTE_DIR 必须为非根目录的绝对路径"
 for cmd in ssh tar mise; do
     command -v "$cmd" >/dev/null || handle_error "本地缺少命令: $cmd"
@@ -63,6 +74,7 @@ remote="${REMOTE_USER}@${REMOTE_HOST}"
 remote_dir=$(quote_shell "$REMOTE_DIR")
 
 # 只读探测在任何远端目录创建、文件上传或服务操作之前完成。
+log_info "发布目标: ${REMOTE_USER}@${REMOTE_HOST}"
 log_info "探测远端操作系统、CPU 架构、内核和 systemd..."
 probe=$("${SSH[@]}" "$remote" 'sh -s' <<'REMOTE'
 set -eu

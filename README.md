@@ -54,6 +54,7 @@ cp .env.template .env
 mise run publish -- --build-only  # 仅 SSH 只读探测与本地构建，不上传或修改远端
 mise run publish                # 探测、本地构建、上传、安装、更新并重启管理器
 mise run publish -- --force      # 保留旧恢复包，跳过未完成发布的自动恢复并重新安装
+mise run publish -- 10.0.0.3     # 仅本次发布改用该主机，不修改 .env 中的 REMOTE_HOST
 ```
 
 发布脚本先检查远端 Linux 系统、`uname -m` 架构、内核版本、运行中的 systemd 以及必要的传输命令，随后通过 `mise exec` 在本地交叉编译。支持 `amd64`、`arm64`、ARMv6、ARMv7 与 `386`，要求 Linux 内核 3.2 或更新版本；未知架构在上传前拒绝。amd64 使用 `GOAMD64=v1`，arm64 使用 `GOARM64=v8.0`，32 位 ARM 与 x86 使用软件浮点，避免依赖未经探测的 CPU 扩展。产物保存在 `.tmp/mihomo-manager-linux-*`。
