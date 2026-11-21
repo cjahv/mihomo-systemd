@@ -65,6 +65,8 @@ type updateRuntime interface {
 	Prepare(context.Context, string) error
 	Render(context.Context, string, []byte) ([]byte, error)
 	Validate(context.Context, string) error
+	validateForDeployment(context.Context, string) (bool, error)
+	validationInputsHash() string
 	ActiveMatches(context.Context, string, string) bool
 	Selections(context.Context) map[string]string
 	Restart(context.Context) error
@@ -83,6 +85,7 @@ type configUpdater struct {
 	status       updateStatus
 	output       io.Writer
 	prepared     *configSnapshot
+	preflight    deploymentValidation
 	forceRestart bool
 	envFile      string
 }
@@ -233,8 +236,11 @@ func (u *configUpdater) RunLocked(ctx context.Context, retry bool) (retErr error
 	if goodErr == nil && good.Hash == before.Hash {
 		appliedEnvHash = good.EnvHash
 	}
+	reusePreflight := u.prepared != nil && u.preflight.EnvHash == before.EnvHash &&
+		u.preflight.InputsHash != "" && u.preflight.InputsHash == u.runtime.validationInputsHash()
 	if baseline && currentMatches {
-		if err := u.validateBytes(ctx, stage, before.Config); err == nil {
+		baselineValidated := reusePreflight && u.preflight.BaselineHash == before.Hash
+		if baselineValidated || u.validateBytes(ctx, stage, before.Config) == nil {
 			before.ID = u.status.ID + "-baseline"
 			before.Verified = true
 			// Reuse the original subscription only when its committed runtime bytes match.
@@ -282,8 +288,10 @@ func (u *configUpdater) RunLocked(ctx context.Context, retry bool) (retErr error
 	if candidate.EnvHash != before.EnvHash {
 		return errors.New("准备期间 .env 已变化，请重新更新")
 	}
-	if err = u.runtime.Validate(ctx, filepath.Join(stage, "config.yaml")); err != nil {
-		return fmt.Errorf("候选配置校验失败: %w", err)
+	if !reusePreflight || u.preflight.CandidateHash != candidate.Hash {
+		if err = u.runtime.Validate(ctx, filepath.Join(stage, "config.yaml")); err != nil {
+			return fmt.Errorf("候选配置校验失败: %w", err)
+		}
 	}
 	candidate.ID = u.status.ID
 	candidate.Selections = before.Selections
@@ -710,6 +718,8 @@ func (u *configUpdater) prepareDeployment(ctx context.Context, dir string) error
 	if err = writeJSON(filepath.Join(dir, "before.json"), before); err != nil {
 		return err
 	}
+	inputsHash := u.runtime.validationInputsHash()
+	var baselineHash string
 	if len(before.Config) > 0 {
 		oldDir := filepath.Join(dir, "baseline")
 		if err = os.Mkdir(oldDir, 0700); err != nil {
@@ -718,8 +728,12 @@ func (u *configUpdater) prepareDeployment(ctx context.Context, dir string) error
 		if err = u.materialize(oldDir, before); err != nil {
 			return err
 		}
-		if err = u.runtime.Validate(ctx, filepath.Join(oldDir, "config.yaml")); err != nil {
+		reusable, err := u.runtime.validateForDeployment(ctx, filepath.Join(oldDir, "config.yaml"))
+		if err != nil {
 			return fmt.Errorf("新核心无法校验现有恢复配置: %w", err)
+		}
+		if reusable {
+			baselineHash = before.Hash
 		}
 	}
 	if err = u.runtime.Prepare(ctx, dir); err != nil {
@@ -729,13 +743,29 @@ func (u *configUpdater) prepareDeployment(ctx context.Context, dir string) error
 	if err != nil {
 		return err
 	}
-	if err = u.runtime.Validate(ctx, filepath.Join(dir, "config.yaml")); err != nil {
+	candidatePath := filepath.Join(dir, "config.yaml")
+	candidateReusable, err := u.runtime.validateForDeployment(ctx, candidatePath)
+	if err != nil {
 		return err
 	}
 	if err = u.checkDeploymentSource(before); err != nil {
 		return err
 	}
-	return writeJSON(filepath.Join(dir, "candidate.json"), candidate)
+	if err = writeJSON(filepath.Join(dir, "candidate.json"), candidate); err != nil {
+		return err
+	}
+	var candidateHash string
+	if candidateReusable && candidate.Hash == validationFileHash(candidatePath) {
+		candidateHash = candidate.Hash
+	}
+	if before.EnvHash != candidate.EnvHash || (baselineHash == "" && candidateHash == "") ||
+		inputsHash == "" || inputsHash != u.runtime.validationInputsHash() {
+		return nil
+	}
+	return writeJSON(filepath.Join(dir, deploymentValidationFile), deploymentValidation{
+		BaselineHash: baselineHash, CandidateHash: candidateHash,
+		EnvHash: candidate.EnvHash, InputsHash: inputsHash,
+	})
 }
 
 func (u *configUpdater) checkDeploymentSource(before configSnapshot) error {

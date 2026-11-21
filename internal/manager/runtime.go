@@ -72,17 +72,22 @@ func (r *linuxRuntime) kernelPath() string {
 }
 
 func (r *linuxRuntime) Validate(ctx context.Context, path string) error {
+	_, err := r.validateConfig(ctx, path)
+	return err
+}
+
+func (r *linuxRuntime) validateConfig(ctx context.Context, path string) (map[string]interface{}, error) {
 	cfg, err := parseConfig(ctx, path)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if _, err = providers(cfg); err != nil {
-		return err
+		return nil, err
 	}
 	// The kernel checks the candidate exactly as it will be loaded. It does not fetch
 	// providers during -t, so validation never depends on network access.
 	cmd := exec.CommandContext(ctx, r.kernelPath(), "-t", "-d", r.dir, "-f", path)
-	return runDiagnosticCommand(ctx, "Mihomo 原生配置校验", cmd, r.output)
+	return cfg, runDiagnosticCommand(ctx, "Mihomo 原生配置校验", cmd, r.output)
 }
 
 func (r *linuxRuntime) systemctl(ctx context.Context, args ...string) (string, error) {

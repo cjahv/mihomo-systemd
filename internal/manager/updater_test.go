@@ -23,6 +23,9 @@ type fakeRuntime struct {
 	readyErrors   []error
 	prepareError  error
 	validateError error
+	validated     []string
+	inputsHash    string
+	nonReusable   string
 	renderError   error
 	restartErrors []error
 	matches       bool
@@ -57,10 +60,16 @@ func (f *fakeRuntime) Render(_ context.Context, _ string, b []byte) ([]byte, err
 }
 func (f *fakeRuntime) Validate(_ context.Context, path string) error {
 	b, _ := os.ReadFile(path)
+	f.validated = append(f.validated, string(b))
 	if string(b) == string(f.candidate) {
 		return f.validateError
 	}
 	return nil
+}
+func (f *fakeRuntime) validationInputsHash() string { return f.inputsHash }
+func (f *fakeRuntime) validateForDeployment(ctx context.Context, path string) (bool, error) {
+	err := f.Validate(ctx, path)
+	return f.validated[len(f.validated)-1] != f.nonReusable, err
 }
 func (f *fakeRuntime) ActiveMatches(context.Context, string, string) bool { return f.matches }
 func (f *fakeRuntime) Selections(context.Context) map[string]string {
